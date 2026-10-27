@@ -1,0 +1,360 @@
+"""Tests on small hand-made fixtures shaped like the real BLS, O*NET and Kaggle files."""
+
+import json
+import zipfile
+from unittest import mock
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from labor_jobs import bls, cli
+from labor_jobs.linkedin import annual_salary, parse_state
+from labor_jobs.soc_mapping import TitleMatcher, normalize_title, title_variants
+
+OEWS_ROWS = [
+    # AREA_TITLE, PRIM_STATE, OCC_CODE, OCC_TITLE, O_GROUP, TOT_EMP, A_MEDIAN, A_MEAN
+    ("California", "CA", "00-0000", "All Occupations", "total", "17,000,000", "53,000", "75,000"),
+    ("California", "CA", "15-1252", "Software Developers", "detailed", "300,000", "170,000", "175,000"),
+    ("California", "CA", "29-1141", "Registered Nurses", "detailed", "320,000", "137,000", "140,000"),
+    ("Texas", "TX", "00-0000", "All Occupations", "total", "13,000,000", "46,000", "60,000"),
+    ("Texas", "TX", "15-1252", "Software Developers", "detailed", "100,000", "#", "130,000"),
+    ("Texas", "TX", "29-1141", "Registered Nurses", "detailed", "220,000", "86,000", "88,000"),
+]
+
+
+def oews_frame(national=False):
+    df = pd.DataFrame(OEWS_ROWS, columns=["AREA_TITLE", "PRIM_STATE", "OCC_CODE", "OCC_TITLE",
+                                          "O_GROUP", "TOT_EMP", "A_MEDIAN", "A_MEAN"])
+    df["I_GROUP"] = "cross-industry"
+    df["JOBS_1000"] = "1.0"
+    df["LOC_QUOTIENT"] = "1.0"
+    if national:
+        df = df[df.PRIM_STATE == "CA"].assign(AREA_TITLE="U.S.").drop(columns="PRIM_STATE")
+        df["TOT_EMP"] = ["150,000,000", "1,600,000", "3,200,000"]
+    return df
+
+
+@pytest.fixture
+def files(tmp_path):
+    # OEWS state file as BLS ships it: an xlsx inside a zip.
+    xlsx = tmp_path / "state_M2024_dl.xlsx"
+    oews_frame().to_excel(xlsx, index=False)
+    state_zip = tmp_path / "oesm24st.zip"
+    with zipfile.ZipFile(state_zip, "w") as zf:
+        zf.write(xlsx, "oesm24st/state_M2024_dl.xlsx")
+    national = tmp_path / "national.csv"
+    oews_frame(national=True).to_csv(national, index=False)
+
+    onet = tmp_path / "onet"
+    onet.mkdir()
+    (onet / "Occupation Data.txt").write_text(
+        "O*NET-SOC Code\tTitle\tDescription\n"
+        "15-1252.00\tSoftware Developers\tWrite software.\n"
+        "29-1141.00\tRegistered Nurses\tCare for patients.\n")
+    (onet / "Alternate Titles.txt").write_text(
+        "O*NET-SOC Code\tTitle\tAlternate Title\tShort Title\tSource(s)\n"
+        "15-1252.00\tSoftware Developers\tSoftware Engineer\t\t08\n"
+        "15-1252.00\tSoftware Developers\tApplication Developer\t\t08\n"
+        "29-1141.00\tRegistered Nurses\tStaff Nurse\t\t08\n"
+        "29-1141.00\tRegistered Nurses\tICU Registered Nurse\t\t08\n")
+
+    postings = pd.DataFrame({
+        "job_id": [str(i) for i in range(7)],
+        "title": ["Sr. Software Engineer - Payments", "Software Engineer II",
+                  "RN - ICU (Nights)", "Registered Nurse", "Aplication Developer",
+                  "Barista", "Software Engineer"],
+        "company_name": ["A", "B", "C", "D", "E", "F", "G"],
+        "location": ["San Francisco, CA", "Austin, TX", "Texas, United States",
+                     "Los Angeles, CA", "Dallas, TX", "Seattle, WA", "United States"],
+        "pay_period": ["YEARLY", "HOURLY", "HOURLY", None, None, "HOURLY", None],
+        "min_salary": [180000, 60, 40, None, None, 15, None],
+        "max_salary": [220000, 80, 50, None, None, 17, None],
+        "currency": ["USD"] * 7,
+        # San Francisco listed 2024-03-09; everything else 2024-04-18.
+        "listed_time": [1709942400000.0] + [1713398400000.0] * 6,
+    })
+    postings_csv = tmp_path / "postings.csv"
+    postings.to_csv(postings_csv, index=False)
+    projections_xlsx = tmp_path / "occupation.xlsx"
+    write_projections(projections_xlsx)
+    return {"state": state_zip, "national": national, "onet": onet, "postings": postings_csv,
+            "projections": projections_xlsx, "out": tmp_path / "out"}
+
+
+def write_projections(path):
+    """Table 1.2 layout: a title row, then headers whose years change each release."""
+    header = ["2025 National Employment Matrix title", "2025 National Employment Matrix code",
+              "Occupation type", "Employment, 2025", "Employment, 2035",
+              "Employment change, numeric, 2025\u201335", "Employment change, percent, 2025\u201335",
+              "Occupational openings, 2025\u201335 annual average",
+              "Typical education needed for entry"]
+    rows = [["Table 1.2 Occupational projections"] + [None] * 8, header,
+            ["Total, all occupations", "00-0000", "Summary", 170280.8, 176198.5, 5917.6, 3.5, 17461.8, "\u2014"],
+            ["Software developers", "15-1252", "Line item", 1700.0, 1874.7, 174.7, 10.2, 95.3, "Bachelor's degree"],
+            ["Registered nurses", "29-1141", "Line item", 3480.0, 3674.7, 194.7, 5.6, 180.8, "Bachelor's degree"]]
+    with pd.ExcelWriter(path) as xl:
+        pd.DataFrame([["index"]]).to_excel(xl, sheet_name="Index", header=False, index=False)
+        pd.DataFrame(rows).to_excel(xl, sheet_name="Table 1.2", header=False, index=False)
+
+
+def test_read_oews_from_zip_handles_commas_and_suppressed_values(files):
+    df = bls.read_oews(files["state"])
+    tx_dev = df[(df.state == "TX") & (df.soc_code == "15-1252")].iloc[0]
+    assert tx_dev.tot_emp == 100000
+    assert pd.isna(tx_dev.a_median)  # "#" = top-coded wage
+
+
+def test_normalize_title():
+    assert normalize_title("Sr. Software Engineer") == "software engineer"
+    assert normalize_title("Registered Nurses") == normalize_title("Registered Nurse")
+    assert normalize_title("Secretaries") == "secretary"
+    assert title_variants("Software Engineer - Payments (Remote)") == [
+        "software engineer payment", "software engineer"]
+
+
+def test_parse_state():
+    assert parse_state("Austin, TX") == "TX"
+    assert parse_state("Texas, United States") == "TX"
+    assert parse_state("United States") is None
+    assert parse_state("United States", "6037") == "CA"  # county FIPS
+
+
+def test_annual_salary_annualizes_and_prefers_normalized():
+    df = pd.DataFrame({"pay_period": ["HOURLY", "YEARLY", "YEARLY"],
+                       "min_salary": [50, 100000, 100000], "max_salary": [50, 120000, 120000],
+                       "normalized_salary": [None, None, 125000]})
+    assert annual_salary(df).tolist() == [104000, 110000, 125000]
+
+
+def test_matcher_methods():
+    ref = pd.DataFrame({"title": ["Software Developers", "Software Engineer"],
+                        "soc_code": ["15-1252", "15-1252"]})
+    m = TitleMatcher(ref, overrides={"barista": "35-3023"}, fuzzy_cutoff=90)
+    got = m.map_titles(pd.Series(["Sofware Engineer", "Barista", "Astronaut",
+                                  "Sr Software Engineer", "Embedded Software Engineer",
+                                  "Software Trainee", "Assistant Engineer"]))
+    assert got.match_method.tolist() == ["fuzzy", "override", "unmatched", "exact",
+                                         "partial", "unmatched", "unmatched"]
+    assert got.soc_code.tolist()[:2] == ["15-1252", "35-3023"]
+
+
+def test_end_to_end(files):
+    fake, empty = mock.Mock(), mock.Mock()
+    empty.json.return_value = {"status": "REQUEST_SUCCEEDED", "Results": {"series": []}}
+    fake.json.return_value = {"status": "REQUEST_SUCCEEDED", "Results": {"series": [
+        {"seriesID": "LASST060000000000003", "data": [
+            {"year": "2024", "period": "M13", "periodName": "Annual", "value": "9.9"},
+            {"year": "2024", "period": "M05", "periodName": "May", "value": "8.0"},
+            {"year": "2024", "period": "M04", "periodName": "April", "value": "5.6"},
+            {"year": "2024", "period": "M03", "periodName": "March", "value": "5.0"}]},
+        {"seriesID": "LASST480000000000003", "data": [
+            {"year": "2024", "period": "M04", "periodName": "April", "value": "4.0"},
+            {"year": "2024", "period": "M03", "periodName": "March", "value": "-"}]},
+    ]}}
+    with mock.patch("labor_jobs.bls.requests.post", side_effect=[fake, empty, empty]) as post:
+        cli.main(["--postings", str(files["postings"]), "--out", str(files["out"]),
+                  "--oews-state-file", str(files["state"]),
+                  "--oews-national-file", str(files["national"]),
+                  "--onet-dir", str(files["onet"]),
+                  "--cache", str(files["out"] / "cache"),
+                  "--history", str(files["out"] / "history.sqlite"),
+                  "--projections-file", str(files["projections"]),
+                  "--skip-jolts"])
+    assert post.call_count == 3  # 51 series in batches of 25
+    payload = post.call_args.kwargs["json"]
+    assert (payload["startyear"], payload["endyear"]) == ("2024", "2024")
+
+    out = files["out"]
+    cov = json.loads((out / "coverage.json").read_text())
+    assert cov["postings"] == 7
+    assert cov["with_state"] == 6
+    # Fuzzy matching is off by default, so the misspelled "Aplication Developer"
+    # stays unmatched along with "Barista".
+    assert cov["matched_soc"] == 5
+    assert "fuzzy" not in cov["matched_by_method"]
+
+    occ = pd.read_csv(out / "occupations.csv", dtype={"soc_code": str}).set_index("soc_code")
+    assert occ.loc["15-1252", "postings"] == 3
+    # 3/5 of postings vs 1.6M/150M of employment
+    assert occ.loc["15-1252", "demand_index"] == pytest.approx((3 / 5) / (1.6 / 150), rel=1e-2)
+
+    so = pd.read_csv(out / "state_occupations.csv").set_index(["state", "soc_code"])
+    assert so.loc[("TX", "29-1141"), "median_posted_salary"] == 93600  # $45/h * 2080
+    assert so.loc[("TX", "29-1141"), "tot_emp"] == 220000
+
+    states = pd.read_csv(out / "states.csv").set_index("state")
+    # CA: one posting in March (5.0) and one in April (5.6); May and the annual
+    # average are outside the posting months.
+    assert states.loc["CA", "unemployment_rate"] == 5.3
+    assert states.loc["CA", "unemployment_period"] == "2024-03 to 2024-04"
+    assert states.loc["TX", "unemployment_rate"] == 4.0
+    assert states.loc["TX", "unemployment_period"] == "2024-04"
+    assert states.loc["WA", "postings"] == 1 and pd.isna(states.loc["WA", "total_employment"])
+
+    assert occ.loc["29-1141", "proj_annual_openings"] == 180800  # published in thousands
+    assert occ.loc["15-1252", "proj_growth_pct"] == 10.2
+    report_text = (out / "report.md").read_text()
+    assert "BLS ten-year outlook (2025-35)" in report_text
+    assert "Trends appear once there are at least 3" in report_text  # only 2 months of postings
+
+    unmatched = pd.read_csv(out / "unmatched_titles.csv")
+    assert sorted(unmatched.title) == ["Aplication Developer", "Barista"]
+    assert "Top 15 occupations by postings" in (out / "report.md").read_text()
+
+
+def test_builtin_overrides_apply_to_variants():
+    from labor_jobs.soc_mapping import load_title_overrides
+    ref = pd.DataFrame({"title": ["Architectural and Engineering Managers"], "soc_code": ["11-9041"]})
+    m = TitleMatcher(ref, overrides=load_title_overrides())
+    got = m.map_titles(pd.Series(["Senior Project Manager", "IT Project Manager",
+                                  "Operations Specialist", "Fleet Operations Specialist"]))
+    assert got.soc_code.tolist()[:2] == ["13-1082", "13-1082"]
+    assert got.soc_code.isna().tolist()[2:] == [True, True]
+    assert got.match_method.tolist() == ["override", "partial", "excluded", "unmatched"]
+
+
+def test_state_unemployment_falls_back_to_latest_month_without_dates():
+    from labor_jobs.merge import state_unemployment
+    postings = pd.DataFrame({"state": ["CA"], "job_id": ["1"]})
+    monthly = pd.DataFrame({"state": ["CA", "CA"], "month": ["2026-08", "2026-09"],
+                            "unemployment_rate": [5.5, 5.4]})
+    got = state_unemployment(postings, monthly).set_index("state")
+    assert got.loc["CA", "unemployment_rate"] == 5.4
+    assert got.loc["CA", "unemployment_period"] == "2026-09"
+
+
+def monthly_series(n=60, start="2020-01"):
+    months = pd.period_range(start, periods=n, freq="M").astype(str)
+    # Smooth upward trend with a little seasonality-free noise.
+    rng = np.random.default_rng(0)
+    values = 1000 * np.exp(0.01 * np.arange(n) + rng.normal(0, 0.01, n))
+    return pd.DataFrame({"series_id": "JTS000000000000000JOL", "month": months, "value": values})
+
+
+def test_jolts_forecast_and_backtest():
+    from labor_jobs import jolts
+    hist = monthly_series()
+    fc = jolts.forecast(hist, horizon=6)
+    assert fc["month"].tolist() == ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06"]
+    assert (fc["lower_80"] < fc["forecast"]).all() and (fc["forecast"] < fc["upper_80"]).all()
+    assert fc["forecast"].iat[-1] > hist["value"].iat[-1]  # follows the upward trend
+
+    err = jolts.backtest(hist, horizon=6, origins=4, step=2)
+    assert set(err["horizon"]) == set(range(1, 7)) and (err["tests"] == 4).all()
+    # On a steady trend the model should beat assuming no change.
+    assert (err["model_mape"] < err["naive_mape"]).all()
+
+    summary = jolts.summarize(jolts.series_catalog(), fc, err, 6)
+    row = summary.iloc[0]
+    assert row["name"] == "Total nonfarm" and row["last_value"] == round(hist["value"].iat[-1] * 1000)
+
+
+def test_jolts_series_ids():
+    from labor_jobs import jolts
+    assert jolts.series_id() == "JTS000000000000000JOL"
+    assert jolts.series_id(state_fips=6) == "JTS000000060000000JOL"
+    assert jolts.series_id("540099") == "JTS540099000000000JOL"
+    assert len(jolts.series_catalog()) == len(jolts.INDUSTRIES) + 51
+
+
+def test_history_trends(tmp_path):
+    from labor_jobs import history
+    db = tmp_path / "h.sqlite"
+    rows = []
+    # Nurses grow from 10% to 30% of postings over four months; developers shrink.
+    for i, (month, nurses) in enumerate([("2024-01", 60), ("2024-02", 100),
+                                         ("2024-03", 140), ("2024-04", 180)]):
+        socs = ["29-1141"] * nurses + ["15-1252"] * (300 - nurses) + [None] * 300
+        rows += [{"job_id": f"{month}-{k}", "soc_code": s, "state": "CA", "month": month}
+                 for k, s in enumerate(socs)]
+    postings = pd.DataFrame(rows)
+    assert history.record(postings.drop(columns="month"), postings["month"], db, "a.csv") == 2400
+    # Loading the same postings again adds nothing.
+    assert history.record(postings.drop(columns="month"), postings["month"], db, "a.csv") == 0
+
+    trend, months = history.trends(history.monthly_counts(db))
+    assert months == ["2024-01", "2024-02", "2024-03", "2024-04"]
+    trend = trend.set_index("soc_code")
+    assert trend.loc["29-1141", "first_month_share_pct"] == 10.0
+    assert trend.loc["29-1141", "last_month_share_pct"] == 30.0
+    assert trend.loc["29-1141", "trend_pct_per_month"] > 0 > trend.loc["15-1252", "trend_pct_per_month"]
+
+    # Too few months: no trend yet.
+    early = history.monthly_counts(db).query("month < '2024-03'")
+    assert history.trends(early)[0].empty
+
+
+def test_postings_without_job_id_get_stable_ids(tmp_path):
+    from labor_jobs.linkedin import load_all
+    csv = tmp_path / "export.csv"
+    pd.DataFrame({"title": ["Nurse", "Nurse"], "location": ["Austin, TX", "Austin, TX"],
+                  "posted_date": ["2024-05-01", "2024-05-02"]}).to_csv(csv, index=False)
+    first, again = load_all([csv]), load_all([csv, csv])
+    assert first["job_id"].tolist() == again["job_id"].tolist()  # duplicates dropped
+    assert first["job_id"].nunique() == 2
+    assert str(first["listed_date"].iat[0]) == "2024-05-01"
+
+
+def test_detailed_occupations_and_new_tiers():
+    ref = pd.DataFrame([
+        ("Software Developers", "15-1252.00"), ("Software Engineer", "15-1252.00"),
+        ("Bioinformatics Scientists", "19-1029.01"), ("Bioinformatics Scientist", "19-1029.01"),
+        ("Solar Sales Representatives and Assessors", "41-4011.07"),
+        ("Sales Representative", "41-4011.07"), ("Sales Representative", "41-4011.00"),
+        ("Wind Energy Operations Managers", "11-9199.09"), ("Site Manager", "11-9199.09"),
+        ("Occupational Therapists", "29-1122.00"),
+        ("AI Engineer (Artificial Intelligence Engineer)", "15-1221.00"),
+    ], columns=["title", "onet_code"])
+    names = {"19-1029.01": "Bioinformatics Scientists",
+             "41-4011.07": "Solar Sales Representatives and Assessors",
+             "11-9199.09": "Wind Energy Operations Managers"}
+    m = TitleMatcher(ref, technologies={"servicenow", "power bi", "python", "ruby on rail"},
+                     occupation_names=names)
+    titles = ["Senior Bioinformatics Scientist", "Sales Representative", "Site Manager",
+              "Artificial Intelligence Engineer", "Home Care Occupational Therapist OT",
+              "ServiceNow Developer", "Python Power BI Developer", "Ruby on Rails Engineer",
+              "Marketing Developer"]
+    got = m.map_titles(pd.Series(titles)).set_index(pd.Index(titles))
+    # Niche occupation keeps its O*NET code; BLS joins on the SOC prefix.
+    assert got.loc["Senior Bioinformatics Scientist", ["onet_code", "soc_code"]].tolist() == \
+        ["19-1029.01", "19-1029"]
+    # Generic titles listed by a specialized occupation stay general.
+    assert got.loc["Sales Representative", "onet_code"] == "41-4011.00"
+    assert got.loc["Site Manager", "onet_code"] == "11-9199.00"
+    # Spelled-out form in brackets is a title of its own.
+    assert got.loc["Artificial Intelligence Engineer", "onet_code"] == "15-1221.00"
+    assert got.loc["Home Care Occupational Therapist OT", ["onet_code", "match_method"]].tolist() == \
+        ["29-1122.00", "partial"]
+    for title in ("ServiceNow Developer", "Python Power BI Developer", "Ruby on Rails Engineer"):
+        assert got.loc[title, ["onet_code", "match_method"]].tolist() == ["15-1252.00", "technology"]
+    assert got.loc["Marketing Developer", "match_method"] == "unmatched"
+
+
+def test_technology_names_and_mentions():
+    from labor_jobs import skills
+    assert skills.display_name("Amazon Web Services AWS software") == "AWS"
+    assert skills.display_name("Microsoft Power BI") == "Power BI"
+    assert skills.display_name("Microsoft Word") == "Microsoft Word"  # "Word" alone is ambiguous
+    assert skills.display_name("Hypertext markup language HTML") == "HTML"
+    assert "Word" not in skills.aliases("Microsoft Word")
+
+    tech = pd.DataFrame({"example": ["Python", "Microsoft Power BI", "Structured query language SQL",
+                                     "Microsoft Word", "C++", "Facebook", "Obscure Tool"],
+                         "hot": [True, True, True, True, True, True, False]})
+    text = pd.Series([
+        "Must know Python, SQL and Power BI. A word of advice: follow us on Facebook.",
+        "C++ and Microsoft Word; Pythonic code is not a skill name",
+        None,
+    ])
+    found = skills.technologies_in_postings(text, tech)
+    assert found.tolist() == [{"Python", "SQL", "Power BI"}, {"C++", "Microsoft Word"}, set()]
+
+    postings = pd.DataFrame({"soc_code": ["15-1252", "15-1252", "29-1141"]})
+    top = skills.top_mentions(postings, found, "soc_code", min_share=0.5)
+    assert top.loc["15-1252"] == "C++ 50%, Microsoft Word 50%, Power BI 50%, Python 50%, SQL 50%"
+    assert "29-1141" not in top.index
+
+    names = skills.title_technologies(tech, ["Software Developers", "Word Processors"])
+    assert {"python", "power bi", "sql"} <= names
+    assert "word" not in names

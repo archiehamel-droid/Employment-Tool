@@ -1,0 +1,49 @@
+title,soc_code,note
+Project Manager,13-1082,Project Management Specialists (O*NET lists it under A&E Managers)
+Program Manager,13-1082,Project Management Specialists
+Account Executive,41-3091,Sales Representatives of Services
+Sales Executive,41-3091,Sales Representatives of Services
+Store Manager,41-1011,First-Line Supervisors of Retail Sales Workers
+Assistant Store Manager,41-1011,First-Line Supervisors of Retail Sales Workers
+Accounting Manager,11-3031,Financial Managers
+Assistant Controller,11-3031,Financial Managers
+Patient Care Technician,31-1131,Nursing Assistants
+Front End Developer,15-1254,Web Developers
+Frontend Developer,15-1254,Web Developers
+Front End Engineer,15-1254,Web Developers
+Full Stack Developer,15-1252,Software Developers
+Full Stack Engineer,15-1252,Software Developers
+Backend Engineer,15-1252,Software Developers
+Backend Developer,15-1252,Software Developers
+.NET Developer,15-1252,Software Developers
+Dotnet Developer,15-1252,Software Developers
+UX Designer,15-1255,Web and Digital Interface Designers
+User Experience Designer,15-1255,Web and Digital Interface Designers
+UI UX Designer,15-1255,Web and Digital Interface Designers
+Product Designer,15-1255,Web and Digital Interface Designers
+Assistant Property Manager,11-9141,"Property, Real Estate, and Community Association Managers"
+Business Development Manager,11-2022,Sales Managers
+Operations Specialist,-,Too vague to place in one occupation (O*NET lists it under Airfield Operations)
+Operations Coordinator,-,Too vague
+Service Specialist,-,Too vague
+Client Service Specialist,-,Too vague
+Client Services Associate,-,Too vague
+Client Service Associate,-,Too vague
+Team Member,-,Too vague
+Engineering Manager,11-9041,Architectural and Engineering Managers
+Director of Engineering,11-9041,Architectural and Engineering Managers
+Manufacturing Engineering Manager,11-9041,Architectural and Engineering Managers
+Software Engineering Manager,11-3021,Computer and Information Systems Managers
+Data Center Operations Manager,11-3021,Computer and Information Systems Managers
+Software Engineer in Test,15-1253,Software Quality Assurance Analysts and Testers
+Software Development Engineer in Test,15-1253,Software Quality Assurance Analysts and Testers
+DevSecOps Engineer,15-1252,Software Developers (as O*NET files DevOps Engineer)
+Customer Support Engineer,15-1232,Computer User Support Specialists
+Data Center Technician,15-1231,Computer Network Support Specialists
+Datacenter Technician,15-1231,Computer Network Support Specialists
+Physical Therapy Technician,31-2022,Physical Therapist Aides
+Generative AI Engineer,15-1221,Computer and Information Research Scientists (as O*NET files AI Engineer)
+AI ML Engineer,15-1221,Computer and Information Research Scientists
+LLM Engineer,15-1221,Computer and Information Research Scientists
+Machine Learning Engineer,15-1221,Computer and Information Research Scientists (O*NET lists it under two codes)
+Data Analyst,15-2051,Data Scientists (BLS classifies data analysts here; O*NET also lists the title under Survey Researchers)

@@ -79,6 +79,9 @@ def load_postings(path, descriptions=False):
     out["location"] = df["location"]
     fips = df["fips"] if "fips" in df else pd.Series(None, index=df.index)
     out["state"] = [parse_state(loc, f) for loc, f in zip(df["location"], fips)]
+    county = pd.to_numeric(fips, errors="coerce")
+    out["county_fips"] = county.where(county >= 1000).map(
+        lambda c: f"{int(c):05d}" if pd.notna(c) else None)
     out["annual_salary"] = annual_salary(df)
     out["experience_level"] = df.get("formatted_experience_level")
     out["work_type"] = df.get("formatted_work_type")

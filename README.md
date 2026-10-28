@@ -12,6 +12,10 @@ people actually work, and what postings pay against what BLS says the job pays.
 | [BLS LAUS](https://www.bls.gov/lau/) | Unemployment rate per state for the months the postings were listed (April 2024 for the Kaggle data), weighted by each state's postings per month | BLS public API v2 |
 | [BLS Employment Projections](https://www.bls.gov/emp/) (2025–35) | Ten-year projected growth, annual openings and typical education for each occupation | `occupation.xlsx` downloaded automatically |
 | [BLS JOLTS](https://www.bls.gov/jlt/) | Monthly job openings since 2001 for 17 industries and every state | BLS public API v2 (needs a free API key) |
+| [DOL H-1B / LCA disclosure data](https://www.dol.gov/agencies/eta/foreign-labor/performance) (fiscal year 2024) | Offered wages for ~540,000 sponsored jobs, with the employer, job title and detailed O*NET code | Four quarterly files downloaded automatically (~335 MB, read once into a slim cache) |
+| [BLS OEWS metro areas](https://www.bls.gov/oes/tables.htm) (May 2024) | Employment and wages by occupation for ~390 metropolitan areas | `oesm24ma.zip` downloaded automatically |
+| [Census metro delineations](https://www.census.gov/geographies/reference-files/time-series/demo/metro-micro/delineation-files.html) (2023) | Which counties and principal cities make up each metro area | Downloaded automatically |
+| [Adzuna API](https://developer.adzuna.com/) | Current US job postings with advertised salaries | Separate fetch command (needs a free key), see below |
 | [Kaggle LinkedIn Job Postings](https://www.kaggle.com/datasets/arshkon/linkedin-job-postings) | ~124k US postings from 2023–24: title, company, location, salary | You download it once (see below) |
 | [O*NET](https://www.onetcenter.org/database.html) | ~55k job titles, each mapped to an occupation code | Downloaded automatically |
 
@@ -29,17 +33,22 @@ and reported title lists. Matching runs in tiers:
 2. **exact**: the normalized title is a known O*NET title. When a title is listed under
    several occupations, the program picks the one it appears under most often, then the
    one with the most BLS employment.
-3. **technology**: one or more technology names followed by a role, such as "ServiceNow
+3. **employer**: the title is one that at least 3 employers used in H-1B filings, with one
+   occupation code on at least 60% of them. Lawyers assign these codes because they set
+   the minimum legal wage, which makes them a good source of real-world titles
+   ("Director of Nursing", "Product Counsel", "Azure DevOps Engineer"). Internal codes
+   like "JC60" are stripped first.
+4. **technology**: one or more technology names followed by a role, such as "ServiceNow
    Developer", "Power BI Developer" or "Ruby on Rails Engineer". Technology names come from
    O*NET's list of 8,775 tools plus a few modern ones it lacks (Snowflake, Databricks).
    Developer and engineer map to Software Developers, administrator to Systems
    Administrators, architect to Computer Systems Engineers/Architects, and analyst,
    consultant or specialist to Computer Systems Analysts.
-4. **partial**: dropping up to two leading words gives a known title
+5. **partial**: dropping up to two leading words gives a known title
    ("Assistant Store Manager" becomes "Store Manager"), or dropping short trailing
    abbreviations does ("Occupational Therapist OT"). It never falls back to a lone
    generic word like "Manager".
-5. **fuzzy** (off by default): similarity matching for typos.
+6. **fuzzy** (off by default): similarity matching for typos.
 
 ### Niche and specialized occupations
 
@@ -72,10 +81,42 @@ Each occupation also gets:
 States are parsed from the posting's location (`Austin, TX`, `Texas, United States`) or its
 FIPS code.
 
-On the Kaggle data this maps about 64% of postings to 822 distinct occupations, including
-2,620 postings in specialized O*NET occupations. Hand spot-checks of random samples found
-roughly 85–90% of exact matches, about 70% of partial matches and about 85% of specialized
-matches to be the right occupation.
+On the Kaggle data this maps 65% of postings to 828 distinct occupations, including
+2,814 postings in specialized O*NET occupations. Hand spot-checks of random samples found
+roughly 85–90% of exact matches, about 90% of employer-title matches, about 70% of partial
+matches and about 85% of specialized matches to be the right occupation.
+
+### Salaries and metro areas
+
+- **H-1B offered wages** are summarized per occupation (filings, median offer, middle-50%
+  range, share at the senior wage level, top sponsoring employers) in `occupations.csv`,
+  `detailed_occupations.csv` and, by state, `state_occupations.csv`. They give salary
+  figures for specialized roles BLS doesn't report, such as Financial Quantitative
+  Analysts or Bioinformatics Scientists. They only cover visa-sponsored jobs, which lean
+  towards tech, research, finance and medicine, and must be at least the local prevailing
+  wage. Only the job, employer, worksite and wage columns are read. The file's contact
+  names, emails and phone numbers are never loaded or written out.
+- **Metro areas**: postings are placed in a metropolitan area by county FIPS code, or else
+  by matching "City, ST" to a metro's principal cities (74% of Kaggle postings). Each
+  metro is compared with BLS employment and wages in `metros.csv`, and each metro and
+  occupation pair in `metro_occupations.csv`.
+
+### Fresh postings from Adzuna
+
+Register for a free key at https://developer.adzuna.com/, then fetch recent postings and
+run the tool on them. Each run adds to the postings history, so after three months of
+fetches the report starts showing rising and falling occupations.
+
+```bash
+export ADZUNA_APP_ID=... ADZUNA_APP_KEY=...
+python -m labor_jobs.adzuna --pages 200 --out data/adzuna/2026-10.csv
+python -m labor_jobs --postings data/adzuna/2026-10.csv
+```
+
+Each page is one API call of up to 50 postings, made newest first from the last 31 days.
+`--what "data scientist"` or `--where Texas` narrow the search. Adzuna estimates salaries
+for postings that don't state one; those estimates are dropped. Adzuna descriptions are
+short snippets, so technology counts from them undercount.
 
 ## Looking ahead
 
@@ -141,6 +182,9 @@ Useful options (`python -m labor_jobs --help` lists them all):
   Without a key, BLS allows 25 requests a day per IP address. On shared cloud networks that
   limit is often already used up.
 - `--skip-unemployment`, `--skip-jolts` and `--skip-projections` leave those parts out.
+- `--h1b-year 2025` uses a different fiscal year of H-1B filings. `--h1b-files` uses local
+  copies, and `--skip-h1b` leaves them out.
+- `--skip-metros` leaves out the metro-area comparison. `--oews-metro-file` uses a local copy.
 - `--skip-posting-skills` skips scanning descriptions for technologies, which saves about
   a minute on the full Kaggle file.
 - `--forecast-months 12` forecasts further ahead. Accuracy drops the further out you go.
@@ -163,6 +207,8 @@ Useful options (`python -m labor_jobs --help` lists them all):
 | `states.csv` | Per state: postings, BLS total employment, postings per 1,000 employed, unemployment rate, latest JOLTS openings and forecast |
 | `postings_with_soc.csv` | Every posting with its state, annual salary, O*NET and SOC codes, match method/score, and technologies mentioned |
 | `detailed_occupations.csv` | Per O*NET occupation, including specialized ones: postings, posted salary, Job Zone, top skills, O*NET hot technologies, technologies mentioned in postings, plus BLS figures for the parent occupation |
+| `metros.csv` | Per metro area: postings, BLS employment, postings per 1,000 employed, posted vs BLS median wage |
+| `metro_occupations.csv` | Per metro and occupation: postings, posted salary, BLS metro employment and median wage |
 | `unmatched_titles.csv` | Most common titles that couldn't be mapped. Use these to build a `--title-map` |
 | `coverage.json` | Counts at each step of the join |
 | `jolts_forecast.csv` | Every industry and state openings forecast, month by month, with 80% ranges |

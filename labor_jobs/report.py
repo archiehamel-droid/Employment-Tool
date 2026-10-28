@@ -42,6 +42,8 @@ def build_report(cov, occupations, states, sources, extras=None, top=15, min_pos
         f"- Postings loaded: {n:,}",
         f"- With a US state: {cov['with_state']:,} ({pct(cov['with_state'], n)})",
         f"- With salary information: {cov['with_salary']:,} ({pct(cov['with_salary'], n)})",
+        *([f"- Placed in a metro area: {cov['with_metro']:,} ({pct(cov['with_metro'], n)})"]
+          if "with_metro" in cov else []),
         f"- Title mapped to a SOC occupation: {cov['matched_soc']:,} ({pct(cov['matched_soc'], n)}) [{methods}]",
         f"- SOC code found in OEWS: {cov['soc_in_oews']:,} ({pct(cov['soc_in_oews'], n)})",
         f"- Distinct occupations found: {cov.get('occupations_found', 0):,}, and "
@@ -95,6 +97,10 @@ def build_report(cov, occupations, states, sources, extras=None, top=15, min_pos
 
     if "detailed" in extras:
         out += detailed_section(extras["detailed"], top)
+    if "h1b" in extras:
+        out += h1b_section(*extras["h1b"], top=top)
+    if "metros" in extras:
+        out += metro_section(*extras["metros"], top=top)
     if "projection_period" in extras:
         out += projections_section(occupations, extras["projection_period"], top, min_postings)
     if "jolts" in extras:
@@ -251,5 +257,64 @@ def detailed_section(detailed, top, min_postings=10):
                 "",
                 "Every occupation with its skills and technologies is in "
                 "`detailed_occupations.csv`.",
+                ""]
+    return out
+
+
+def h1b_section(detailed, fiscal_year, top, min_filings=50):
+    rows = detailed.dropna(subset=["h1b_filings"])
+    rows = rows[rows["h1b_filings"] >= min_filings]
+    cols = {"onet_title": "Occupation", "postings": "Postings", "h1b_filings": "H-1B filings",
+            "h1b_median_wage": "H-1B median offer $", "h1b_wage_p25": "25th pct $",
+            "h1b_wage_p75": "75th pct $", "median_posted_salary": "Posted median $",
+            "bls_median_wage": "BLS median $", "h1b_top_employers": "Top sponsoring employers"}
+    out = [f"## Offered salaries from H-1B filings (fiscal year {fiscal_year})",
+           "Employers sponsoring H-1B and similar visas must file the wage they will pay for "
+           "each job. These are real offers for specific roles, including specialized ones "
+           "BLS doesn't report wages for, but only for sponsored jobs: mostly tech, research, "
+           "finance and medicine, and at least the local prevailing wage.",
+           "",
+           f"### Occupations in the postings with the most filings (at least {min_filings})",
+           table(rows.sort_values("h1b_filings", ascending=False).head(top), cols),
+           ""]
+    niche = rows[rows["specialized"]]
+    if len(niche):
+        out += [f"### Specialized occupations (at least {min_filings} filings)",
+                table(niche.sort_values("h1b_filings", ascending=False).head(top), cols), ""]
+    return out
+
+
+def metro_section(metros, metro_occ, top, min_postings=200):
+    big = metros[metros["postings"] >= min_postings]
+    out = ["## Metro areas",
+           "Postings placed in metropolitan areas by county or principal city, compared with "
+           "BLS employment and wages for that metro.",
+           "",
+           "### Most postings",
+           table(metros.head(top), {
+               "metro_name": "Metro area", "postings": "Postings",
+               "total_employment": "BLS employment",
+               "postings_per_1k_employed": "Postings per 1k employed",
+               "median_posted_salary": "Posted median $",
+               "oews_median_wage_all_occupations": "BLS median $ (all jobs)"}),
+           ""]
+    if len(big):
+        out += [f"### Most postings per 1,000 employed (at least {min_postings} postings)",
+                table(big.nlargest(top, "postings_per_1k_employed"), {
+                    "metro_name": "Metro area", "postings": "Postings",
+                    "total_employment": "BLS employment",
+                    "postings_per_1k_employed": "Postings per 1k employed"}),
+                ""]
+    gaps = metro_occ.dropna(subset=["posted_vs_oews_median_pct"])
+    if len(gaps):
+        out += ["### Posted salary vs the metro's BLS median wage, by occupation",
+                table(gaps.sort_values("salary_samples", ascending=False).head(top), {
+                    "metro_name": "Metro area", "occ_title": "Occupation",
+                    "salary_samples": "Postings with salary",
+                    "median_posted_salary": "Posted median $", "a_median": "Metro BLS median $",
+                    "posted_vs_oews_median_pct": "Gap %"}),
+                "",
+                "Every metro and metro-occupation pair is in `metros.csv` and "
+                "`metro_occupations.csv`.",
                 ""]
     return out

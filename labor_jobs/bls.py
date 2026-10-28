@@ -23,6 +23,7 @@ API_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 
 # OEWS column -> name used in this program.
 OEWS_COLUMNS = {
+    "AREA": "area",
     "PRIM_STATE": "state",
     "AREA_TITLE": "area_title",
     "OCC_CODE": "soc_code",
@@ -38,17 +39,19 @@ NUMERIC = ["tot_emp", "jobs_1000", "loc_quotient", "a_mean", "a_median"]
 
 
 def oews_file(cache_dir, year, scope, user_agent):
-    """Fetch the OEWS flat file. scope is "st" (states) or "nat" (national)."""
+    """Fetch the OEWS flat file. scope is "st" (states), "nat" (national) or
+    "ma" (metropolitan areas)."""
     yy = f"{year % 100:02d}"
     url = OEWS_URL.format(yy=yy, scope=scope)
     return download(url, Path(cache_dir) / f"oesm{yy}{scope}.zip", user_agent)
 
 
-def read_oews(path):
+def read_oews(path, sheet_prefix=None):
     """Read an OEWS file (.zip as published, .xlsx, or .csv) into a tidy frame.
 
     Keeps cross-industry rows for the all-occupations total ("total") and
-    individual occupations ("detailed"). BLS marks suppressed or top-coded
+    individual occupations ("detailed"). sheet_prefix picks the spreadsheet
+    inside a zip holding several (the metro zip has MSA_ and BOS_ files). BLS marks suppressed or top-coded
     values with *, ** or #; these become NaN.
     """
     path = Path(path)
@@ -59,6 +62,8 @@ def read_oews(path):
                       and "desc" not in Path(n).name.lower()]
             if not sheets:
                 raise ValueError(f"No spreadsheet found in {path}")
+            if sheet_prefix:
+                sheets = [n for n in sheets if Path(n).name.startswith(sheet_prefix)] or sheets
             name = next((n for n in sheets if "_dl" in n.lower()), sheets[0])
             df = pd.read_excel(io.BytesIO(zf.read(name)), dtype=str)
     elif path.suffix.lower() == ".csv":
@@ -71,6 +76,8 @@ def read_oews(path):
         df = df[df["I_GROUP"].str.lower() == "cross-industry"]
     if "PRIM_STATE" not in df:
         df["PRIM_STATE"] = "US"
+    if "AREA" not in df:
+        df["AREA"] = None
     df = df[list(OEWS_COLUMNS)].rename(columns=OEWS_COLUMNS)
     df["o_group"] = df["o_group"].str.lower()
     df = df[df["o_group"].isin(["total", "detailed"])].copy()

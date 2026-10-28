@@ -12,6 +12,8 @@ characters give the SOC code used to join BLS data.
 Titles are normalized (lowercased, abbreviations expanded, seniority words and
 qualifiers removed) and matched in tiers:
   exact       the normalized title is a known title
+  employer    the title is one employers used in H-1B filings, where they
+              nearly always assigned it the same occupation code
   technology  a technology name plus a role ("ServiceNow Developer")
   partial     dropping up to two leading words, or short trailing
               abbreviations, gives a known title
@@ -192,13 +194,16 @@ def load_title_overrides(*paths):
 
 class TitleMatcher:
     def __init__(self, reference, overrides=None, fuzzy_cutoff=101, employment=None,
-                 technologies=None, occupation_names=None):
+                 technologies=None, occupation_names=None, employer_titles=None):
         """reference: frame of (title, onet_code); SOC codes are accepted too.
         employment: {soc_code: jobs}, used to pick the likelier occupation for
         a title listed under several. technologies: normalized technology
         names for the technology tier. occupation_names: {onet_code: name};
         when given, a title only maps to a specialized occupation if it shares
-        a distinctive word with the occupation's name."""
+        a distinctive word with the occupation's name. employer_titles:
+        {normalized title: O*NET code} from H-1B filings."""
+        self.employer_titles = {k: v for k, v in (employer_titles or {}).items()
+                                if k not in GENERIC_WORDS}
         self.overrides = overrides or {}
         self.technologies = set(technologies or ())
         code_col = "onet_code" if "onet_code" in reference else "soc_code"
@@ -261,7 +266,7 @@ class TitleMatcher:
 
         # Technology before partial, so "Ruby on Rails Engineer" isn't cut
         # down to "rails engineer" (a railroad job).
-        for tier in (self._technology, self._partial):
+        for tier in (self._employer, self._technology, self._partial):
             still = []
             for raw, variants in pending:
                 hit = tier(variants)
@@ -316,6 +321,12 @@ class TitleMatcher:
                     key = " ".join(suffix)
                     if key in self.lookup:
                         return self.lookup[key], "partial", 100.0
+        return None
+
+    def _employer(self, variants):
+        for v in variants:
+            if v in self.employer_titles:
+                return self.employer_titles[v], "employer", 100.0
         return None
 
     def _technology(self, variants):

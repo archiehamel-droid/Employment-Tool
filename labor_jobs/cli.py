@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, history, jolts, merge, projections, report, skills
+from . import bls, h1b, history, jolts, merge, metros, projections, report, skills
 from .linkedin import load_all
 from .soc_mapping import TitleMatcher, load_onet_titles, load_title_overrides
 
@@ -59,6 +59,16 @@ def parse_args(argv=None):
                    help="SQLite file that accumulates postings across runs")
     p.add_argument("--no-history", action="store_true",
                    help="don't record postings or report posting trends")
+    p.add_argument("--h1b-year", type=int, default=2024,
+                   help="federal fiscal year of H-1B wage filings (Oct-Sep; default 2024 "
+                        "to match the Kaggle postings)")
+    p.add_argument("--h1b-files", nargs="+",
+                   help="local H-1B disclosure files instead of downloading")
+    p.add_argument("--skip-h1b", action="store_true",
+                   help="leave out H-1B offered wages and employer job titles")
+    p.add_argument("--oews-metro-file", help="local OEWS metro file (oesm24ma.zip)")
+    p.add_argument("--skip-metros", action="store_true",
+                   help="leave out metro-area comparisons")
     p.add_argument("--skip-posting-skills", action="store_true",
                    help="don't scan posting descriptions for technologies (saves a minute "
                         "or two on large files)")
@@ -122,7 +132,18 @@ def main(argv=None):
         tech_names = skills.title_technologies(
             technologies, pd.concat([profiles["onet_title"], oews_titles["occ_title"]]))
     names = dict(zip(profiles["onet_code"], profiles["onet_title"])) if profiles is not None else None
-    matcher = TitleMatcher(reference, overrides, args.fuzzy_cutoff, employment, tech_names, names)
+
+    filings, employer_titles = None, None
+    if not args.skip_h1b:
+        print("Loading H-1B wage filings...")
+        paths = args.h1b_files or h1b.h1b_files(args.cache, args.h1b_year, user_agent)
+        filings = h1b.read_h1b(paths)
+        employer_titles = h1b.reference_titles(filings)
+        sources.append(f"DOL H-1B/LCA disclosure data, fiscal year {args.h1b_year} "
+                       f"({len(filings):,} certified full-time filings)")
+
+    matcher = TitleMatcher(reference, overrides, args.fuzzy_cutoff, employment, tech_names, names,
+                           employer_titles)
     postings = postings.join(matcher.map_titles(postings["title"]))
 
     mentions = None
@@ -153,8 +174,32 @@ def main(argv=None):
     if mentions is not None:
         detailed = detailed.merge(skills.top_mentions(postings, mentions, "onet_code"),
                                   left_on="onet_code", right_index=True, how="left")
+    if filings is not None:
+        detailed = detailed.merge(h1b.summarize(filings, "onet_code"), on="onet_code", how="left")
+        occupations = occupations.merge(h1b.summarize(filings, "soc_code"), on="soc_code", how="left")
+        state_occ = state_occ.merge(h1b.summarize(filings, ["state", "soc_code"]),
+                                    on=["state", "soc_code"], how="left")
+        extras["h1b"] = (detailed, args.h1b_year)
     detailed.to_csv(out / "detailed_occupations.csv", index=False)
     extras["detailed"] = detailed
+
+    if not args.skip_metros:
+        print("Placing postings in metro areas...")
+        list1, list2 = metros.delineation_files(args.cache, user_agent)
+        by_county, by_city, metro_names = metros.read_delineations(list1, list2)
+        oews_metro = bls.read_oews(args.oews_metro_file or
+                                   bls.oews_file(args.cache, args.oews_year, "ma", user_agent),
+                                   sheet_prefix="MSA_")
+        postings["metro"] = metros.assign_metros(postings, by_county, by_city)
+        metro_table = metros.by_metro(postings, oews_metro, metro_names)
+        metro_occ = metros.by_metro_occupation(postings, oews_metro, metro_names,
+                                               args.min_salary_samples)
+        metro_table.to_csv(out / "metros.csv", index=False)
+        metro_occ.to_csv(out / "metro_occupations.csv", index=False)
+        cov["with_metro"] = int(postings["metro"].notna().sum())
+        extras["metros"] = (metro_table, metro_occ)
+        sources.append(f"BLS OEWS metropolitan areas, May {args.oews_year}; Census 2023 "
+                       "metro area delineations")
 
     if not args.skip_jolts:
         print("Fetching JOLTS job openings and forecasting...")

@@ -160,7 +160,7 @@ def test_end_to_end(files):
                   "--cache", str(files["out"] / "cache"),
                   "--history", str(files["out"] / "history.sqlite"),
                   "--projections-file", str(files["projections"]),
-                  "--skip-jolts"])
+                  "--skip-jolts", "--skip-h1b", "--skip-metros"])
     assert post.call_count == 3  # 51 series in batches of 25
     payload = post.call_args.kwargs["json"]
     assert (payload["startyear"], payload["endyear"]) == ("2024", "2024")
@@ -358,3 +358,113 @@ def test_technology_names_and_mentions():
     names = skills.title_technologies(tech, ["Software Developers", "Word Processors"])
     assert {"python", "power bi", "sql"} <= names
     assert "word" not in names
+
+
+def test_h1b_wages_and_employer_titles(tmp_path):
+    from labor_jobs import h1b
+    rows = []
+    for i, (title, code, employer, wage, unit, level) in enumerate([
+        ("Bioinformatics Scientist", "19-1029.01", "A LABS", "120,000", "Year", "II"),
+        ("Bioinformatics Scientist II", "19-1029.01", "B BIO", "130000", "Year", "III"),
+        ("Bioinformatics Scientist", "19-1029.01", "C GENE", "60", "Hour", "IV"),
+        ("Bioinformatics Scientist", "19-1029.00", "D INC", "110000", "Year", "I"),
+        ("Data Engineer JC60", "15-1243.00", "A LABS", "150000", "Year", "II"),
+        ("Data Engineer", "15-1243.00", "B BIO", "140000", "Year", "II"),
+        ("Data Engineer - 2 - US", "15-1243.00", "C GENE", "145000", "Year", "II"),
+        ("Data Engineer", "15-1252.00", "D INC", "135000", "Year", "II"),
+        ("Data Engineer", "15-1243.00", "D INC", "1", "Year", "II"),  # implausible wage
+    ]):
+        rows.append({"CASE_NUMBER": f"I-{i}", "CASE_STATUS": "Certified", "DECISION_DATE": "2024-05-01",
+                     "VISA_CLASS": "H-1B", "JOB_TITLE": title, "SOC_CODE": code,
+                     "FULL_TIME_POSITION": "Y", "TOTAL_WORKER_POSITIONS": "1",
+                     "EMPLOYER_NAME": employer, "NAICS_CODE": "541511", "WORKSITE_CITY": "Boston",
+                     "WORKSITE_STATE": "MA", "WAGE_RATE_OF_PAY_FROM": wage,
+                     "WAGE_UNIT_OF_PAY": unit, "PW_WAGE_LEVEL": level})
+    rows.append({**rows[0], "CASE_NUMBER": "I-denied", "CASE_STATUS": "Denied"})
+    rows.append({**rows[0], "CASE_NUMBER": "I-part", "FULL_TIME_POSITION": "N"})
+    path = tmp_path / "lca.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+    filings = h1b.read_h1b(path)
+    assert len(filings) == 8  # denied, part-time and the $1 wage dropped
+    assert filings.loc[filings.case_number == "I-2", "annual_wage"].iat[0] == 60 * 2080
+
+    by_code = h1b.summarize(filings, "onet_code").set_index("onet_code")
+    assert by_code.loc["19-1029.01", "h1b_filings"] == 3
+    assert by_code.loc["19-1029.01", "h1b_median_wage"] == 124800
+    assert by_code.loc["19-1029.01", "h1b_level_iv_pct"] == 33.3
+    assert by_code.loc["15-1243.00", "h1b_top_employers"].startswith("A Labs")
+
+    refs = h1b.reference_titles(filings)
+    # Codes and "- 2 - US" suffixes are stripped; 3 of 4 employers agree.
+    assert refs[normalize_title("Data Engineer")] == "15-1243.00"
+    assert refs[normalize_title("Bioinformatics Scientist")] == "19-1029.01"
+
+
+def test_metro_placement(tmp_path):
+    from labor_jobs import metros
+    header = ["CBSA Code", "Metropolitan Division Code", "CSA Code", "CBSA Title",
+              "Metropolitan/Micropolitan Statistical Area", "Metropolitan Division Title",
+              "CSA Title", "County/County Equivalent", "State Name", "FIPS State Code",
+              "FIPS County Code", "Central/Outlying County"]
+    list1 = [["title"] + [None] * 11, [None] * 12, header,
+             ["12420", None, None, "Austin-Round Rock-San Marcos, TX", "Metropolitan Statistical Area",
+              None, None, "Travis County", "Texas", "48", "453", "Central"],
+             ["99999", None, None, "Smalltown, TX", "Micropolitan Statistical Area",
+              None, None, "Small County", "Texas", "48", "001", "Central"]]
+    list2 = [["title"] + [None] * 5, [None] * 6,
+             ["CBSA Code", "CBSA Title", "Metropolitan/Micropolitan Statistical Area",
+              "Principal City Name", "FIPS State Code", "FIPS Place Code"],
+             ["12420", "Austin-Round Rock-San Marcos, TX", "Metropolitan Statistical Area",
+              "Round Rock", "48", "63500"]]
+    for name, rows in (("l1.xlsx", list1), ("l2.xlsx", list2)):
+        pd.DataFrame(rows).to_excel(tmp_path / name, header=False, index=False)
+    by_county, by_city, titles = metros.read_delineations(tmp_path / "l1.xlsx", tmp_path / "l2.xlsx")
+    assert by_county == {"48453": "12420"}  # micropolitan areas left out
+
+    postings = pd.DataFrame({
+        "job_id": ["1", "2", "3", "4"], "soc_code": ["15-1252", "15-1252", None, "15-1252"],
+        "annual_salary": [150000, 130000, None, 90000],
+        "location": ["Austin, TX", "Round Rock, TX", "Smalltown, TX", "Remote"],
+        "county_fips": ["48453", None, "48001", None]})
+    postings["metro"] = metros.assign_metros(postings, by_county, by_city)
+    assert postings["metro"].tolist()[:2] == ["12420", "12420"]
+    assert postings["metro"].isna().tolist()[2:] == [True, True]
+
+    oews = pd.DataFrame({"area": ["12420", "12420"], "soc_code": ["00-0000", "15-1252"],
+                         "occ_title": ["All", "Software Developers"], "o_group": ["total", "detailed"],
+                         "tot_emp": [1_300_000, 40_000], "a_median": [55000, 140000]})
+    table = metros.by_metro(postings, oews, titles).set_index("cbsa")
+    assert table.loc["12420", "postings"] == 2
+    assert table.loc["12420", "metro_name"] == "Austin-Round Rock-San Marcos, TX"
+    occ = metros.by_metro_occupation(postings, oews, titles, min_salary_samples=2)
+    assert occ.iloc[0]["posted_vs_oews_median_pct"] == 0.0  # median 140,000 vs 140,000
+
+
+def test_adzuna_rows_and_paging(tmp_path):
+    from labor_jobs import adzuna
+    from labor_jobs.linkedin import load_postings
+
+    def result(i, predicted="0"):
+        return {"id": str(i), "title": "<strong>Data</strong> Scientist", "created": "2026-10-20T09:00:00Z",
+                "location": {"display_name": "Austin, Travis County",
+                             "area": ["US", "Texas", "Travis County", "Austin"]},
+                "company": {"display_name": "Acme"}, "salary_min": 120000, "salary_max": 140000,
+                "salary_is_predicted": predicted, "description": "Python and SQL",
+                "category": {"label": "IT Jobs"}, "contract_time": "full_time"}
+
+    pages = [[result(i) for i in range(50)], [result(50, predicted="1")]]
+    session = mock.Mock()
+    session.get.side_effect = [mock.Mock(status_code=200, json=mock.Mock(return_value={"results": p}),
+                                         raise_for_status=mock.Mock()) for p in pages]
+    rows = list(adzuna.fetch("id", "key", pages=5, session=session, pause=0))
+    assert session.get.call_count == 2  # stopped when a page came back short
+    assert rows[0]["title"] == "Data Scientist" and rows[0]["location"] == "Austin, TX"
+    assert rows[-1]["min_salary"] is None  # Adzuna's estimated salary dropped
+
+    out = tmp_path / "adzuna.csv"
+    pd.DataFrame(rows, columns=adzuna.FIELDS).to_csv(out, index=False)
+    loaded = load_postings(out)
+    assert loaded["state"].iat[0] == "TX"
+    assert loaded["annual_salary"].iat[0] == 130000
+    assert str(loaded["listed_date"].iat[0]) == "2026-10-20"

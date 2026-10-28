@@ -10,7 +10,7 @@ import pandas as pd
 
 from . import bls, h1b, history, jolts, merge, metros, projections, report, skills
 from .linkedin import load_all
-from .soc_mapping import TitleMatcher, load_onet_titles, load_title_overrides
+from .soc_mapping import TitleMatcher, is_gig, load_onet_titles, load_title_overrides
 
 
 def parse_args(argv=None):
@@ -59,6 +59,9 @@ def parse_args(argv=None):
                    help="SQLite file that accumulates postings across runs")
     p.add_argument("--no-history", action="store_true",
                    help="don't record postings or report posting trends")
+    p.add_argument("--history-feed",
+                   help="name of the postings source for trends, e.g. 'linkedin' (default: "
+                        "'adzuna' for files from labor_jobs.adzuna, otherwise 'linkedin')")
     p.add_argument("--h1b-year", type=int, default=2024,
                    help="federal fiscal year of H-1B wage filings (Oct-Sep; default 2024 "
                         "to match the Kaggle postings)")
@@ -145,6 +148,9 @@ def main(argv=None):
     matcher = TitleMatcher(reference, overrides, args.fuzzy_cutoff, employment, tech_names, names,
                            employer_titles)
     postings = postings.join(matcher.map_titles(postings["title"]))
+    gig = [is_gig(t, c) for t, c in zip(postings["title"], postings["company_name"])]
+    postings.loc[gig, ["onet_code", "soc_code"]] = None
+    postings.loc[gig, "match_method"] = "gig"
 
     mentions = None
     if "description" in postings and technologies is not None:
@@ -224,9 +230,10 @@ def main(argv=None):
             print(f"  skipped: {exc}")
 
     if not args.no_history:
+        feed = args.history_feed or history.detect_feed(postings)
         added = history.record(postings, merge.posting_months(postings), args.history,
-                               "; ".join(args.postings))
-        counts = history.monthly_counts(args.history)
+                               "; ".join(args.postings), feed)
+        counts = history.monthly_counts(args.history, feed)
         trend, months = history.trends(counts)
         if len(trend):
             titles = oews_national[["soc_code", "occ_title"]]
@@ -234,7 +241,7 @@ def main(argv=None):
             trend.to_csv(out / "posting_trends.csv", index=False)
         else:
             (out / "posting_trends.csv").unlink(missing_ok=True)
-        extras["history"] = (trend, months, args.history, added)
+        extras["history"] = (trend, months, args.history, added, feed)
         print(f"  history: {added:,} new postings recorded; "
               f"{len(months)} month(s) with enough postings to compare")
 

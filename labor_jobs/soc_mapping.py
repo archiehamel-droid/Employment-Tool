@@ -14,6 +14,8 @@ qualifiers removed) and matched in tiers:
   exact       the normalized title is a known title
   employer    the title is one employers used in H-1B filings, where they
               nearly always assigned it the same occupation code
+  keyword     a few unambiguous patterns in long ad-style titles
+              ("CDL Class A Company Driver - OTR - Dry Van")
   technology  a technology name plus a role ("ServiceNow Developer")
   partial     dropping up to two leading words, or short trailing
               abbreviations, gives a known title
@@ -74,6 +76,23 @@ MODIFIER_WORDS = {
     "night", "weekend", "bilingual", "chief", "head",
 }
 MAX_DROPPED_WORDS = 2
+# (pattern on the lowercased raw title, O*NET code).
+KEYWORD_RULES = [
+    (re.compile(r"\bcdl\b|\bclass a\b.*\bdriver|\botr\b.*\bdriver|\btruck driver"),
+     "53-3032.00"),  # Heavy and Tractor-Trailer Truck Drivers
+]
+# App platforms whose ads recruit independent contractors ("Drive with
+# DoorDash"). BLS employment data doesn't cover these, so they are counted
+# separately instead of matched to an occupation.
+GIG_COMPANIES = {"uber", "doordash", "gopuff", "instacart", "lyft", "grubhub", "shipt",
+                 "spark driver", "amazon flex", "roadie", "postmates", "uber eats"}
+GIG_WORDS = re.compile(r"(?i)\b(driv|deliver|dash|earn|gig|shop|courier|rideshare|"
+                       r"repartidor|conductor|sign up)")
+
+
+def is_gig(title, company):
+    return (isinstance(company, str) and company.strip().lower() in GIG_COMPANIES
+            and isinstance(title, str) and bool(GIG_WORDS.search(title)))
 # Words too common in occupation names to show a title belongs to a
 # specialized occupation ("Site Manager" vs "Wind Energy Operations Managers").
 NOT_DISTINCTIVE = GENERIC_WORDS | {
@@ -266,10 +285,10 @@ class TitleMatcher:
 
         # Technology before partial, so "Ruby on Rails Engineer" isn't cut
         # down to "rails engineer" (a railroad job).
-        for tier in (self._employer, self._technology, self._partial):
+        for tier in (self._employer, self._keyword, self._technology, self._partial):
             still = []
             for raw, variants in pending:
-                hit = tier(variants)
+                hit = tier(raw) if tier == self._keyword else tier(variants)
                 if hit:
                     results[raw] = hit
                 else:
@@ -321,6 +340,13 @@ class TitleMatcher:
                     key = " ".join(suffix)
                     if key in self.lookup:
                         return self.lookup[key], "partial", 100.0
+        return None
+
+    def _keyword(self, raw):
+        text = raw.lower()
+        for pattern, code in KEYWORD_RULES:
+            if pattern.search(text):
+                return code, "keyword", 100.0
         return None
 
     def _employer(self, variants):

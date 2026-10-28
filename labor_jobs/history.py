@@ -4,7 +4,10 @@ counts can be compared month to month as new postings files are loaded.
 A posting is stored once per job_id, under the month it was listed; loading
 the same file twice changes nothing. Occupations are compared by their share
 of each month's postings rather than raw counts, so months with bigger or
-smaller postings files stay comparable.
+smaller postings files stay comparable. Each posting also records its feed
+("linkedin", "adzuna", ...), and trends only compare months from one feed:
+different job sites carry different mixes of jobs, so mixing them would show
+the difference between sites rather than change over time.
 """
 
 import sqlite3
@@ -19,36 +22,54 @@ CREATE TABLE IF NOT EXISTS postings (
     month TEXT NOT NULL,
     soc_code TEXT,
     state TEXT,
-    source TEXT
+    source TEXT,
+    feed TEXT
 )
 """
 
 
-def record(postings, months, db_path, source):
+def _connect(db_path):
+    con = sqlite3.connect(db_path)
+    con.execute(SCHEMA)
+    columns = {row[1] for row in con.execute("PRAGMA table_info(postings)")}
+    if "feed" not in columns:  # files made before feeds were tracked
+        con.execute("ALTER TABLE postings ADD COLUMN feed TEXT")
+        con.execute("UPDATE postings SET feed = CASE WHEN job_id LIKE 'adzuna-%' "
+                    "THEN 'adzuna' ELSE 'linkedin' END")
+    return con
+
+
+def detect_feed(postings):
+    """"adzuna" for files from labor_jobs.adzuna, otherwise "linkedin"."""
+    ids = postings["job_id"].astype(str)
+    return "adzuna" if len(ids) and ids.str.startswith("adzuna-").all() else "linkedin"
+
+
+def record(postings, months, db_path, source, feed):
     """Add postings with a known month; returns how many were new."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     rows = (postings.assign(month=months).dropna(subset=["month"])
             [["job_id", "month", "soc_code", "state"]])
     rows = rows.astype(object).where(rows.notna(), None)
-    with sqlite3.connect(db_path) as con:
-        con.execute(SCHEMA)
+    with _connect(db_path) as con:
         before = con.execute("SELECT COUNT(*) FROM postings").fetchone()[0]
         # Re-running with better title matching updates the occupation.
         con.executemany(
-            "INSERT INTO postings VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE "
+            "INSERT INTO postings (job_id, month, soc_code, state, source, feed) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE "
             "SET soc_code = excluded.soc_code, state = excluded.state",
-            [(*r, str(source)) for r in rows.itertuples(index=False)])
+            [(*r, str(source), feed) for r in rows.itertuples(index=False)])
         after = con.execute("SELECT COUNT(*) FROM postings").fetchone()[0]
     return after - before
 
 
-def monthly_counts(db_path):
-    with sqlite3.connect(db_path) as con:
-        con.execute(SCHEMA)
+def monthly_counts(db_path, feed=None):
+    with _connect(db_path) as con:
+        where, params = ("WHERE feed = ?", (feed,)) if feed else ("", ())
         return pd.read_sql_query(
-            "SELECT month, soc_code, COUNT(*) AS postings FROM postings "
-            "GROUP BY month, soc_code", con)
+            f"SELECT month, soc_code, COUNT(*) AS postings FROM postings {where} "
+            "GROUP BY month, soc_code", con, params=params)
 
 
 def covered_months(counts, min_month_postings=500):

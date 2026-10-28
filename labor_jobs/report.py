@@ -50,6 +50,9 @@ def build_report(cov, occupations, states, sources, extras=None, top=15, min_pos
         f"{cov.get('matched_specialized', 0):,} postings ({pct(cov.get('matched_specialized', 0), n)}) "
         "matched a specialized O*NET occupation finer than BLS reports",
         "",
+        *([f"- Gig-app contractor ads (Uber, DoorDash and similar), counted separately: "
+           f"{cov['matched_by_method']['gig']:,}"] if "gig" in cov["matched_by_method"] else []),
+        "",
         "Unmapped titles are listed in `unmatched_titles.csv`. Add corrections to a "
         "CSV with `title,soc_code` columns and pass it with `--title-map`.",
         "",
@@ -190,9 +193,10 @@ def jolts_section(summary, errors, horizon):
     return out
 
 
-def history_section(trend, months, db_path, added, top):
+def history_section(trend, months, db_path, added, feed, top):
     out = ["## Posting trends over time",
-           f"Postings are recorded in `{db_path}` ({added:,} new this run). "]
+           f"Postings are recorded in `{db_path}` ({added:,} new this run). Trends compare "
+           f"months of {feed} postings only. "]
     if not len(trend):
         listed = ", ".join(months) if months else "none"
         out[-1] += (f"Months with enough postings to compare so far: {listed}. Trends appear "

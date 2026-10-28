@@ -38,17 +38,19 @@ and reported title lists. Matching runs in tiers:
    the minimum legal wage, which makes them a good source of real-world titles
    ("Director of Nursing", "Product Counsel", "Azure DevOps Engineer"). Internal codes
    like "JC60" are stripped first.
-4. **technology**: one or more technology names followed by a role, such as "ServiceNow
+4. **keyword**: a few unambiguous patterns in long ad-style titles. For now this means
+   truck-driver ads that mention CDL, Class A or OTR driving.
+5. **technology**: one or more technology names followed by a role, such as "ServiceNow
    Developer", "Power BI Developer" or "Ruby on Rails Engineer". Technology names come from
    O*NET's list of 8,775 tools plus a few modern ones it lacks (Snowflake, Databricks).
    Developer and engineer map to Software Developers, administrator to Systems
    Administrators, architect to Computer Systems Engineers/Architects, and analyst,
    consultant or specialist to Computer Systems Analysts.
-5. **partial**: dropping up to two leading words gives a known title
+6. **partial**: dropping up to two leading words gives a known title
    ("Assistant Store Manager" becomes "Store Manager"), or dropping short trailing
    abbreviations does ("Occupational Therapist OT"). It never falls back to a lone
    generic word like "Manager".
-6. **fuzzy** (off by default): similarity matching for typos.
+7. **fuzzy** (off by default): similarity matching for typos.
 
 ### Niche and specialized occupations
 
@@ -96,8 +98,9 @@ matches and about 85% of specialized matches to be the right occupation.
   towards tech, research, finance and medicine, and must be at least the local prevailing
   wage. Only the job, employer, worksite and wage columns are read. The file's contact
   names, emails and phone numbers are never loaded or written out.
-- **Metro areas**: postings are placed in a metropolitan area by county FIPS code, or else
-  by matching "City, ST" to a metro's principal cities (74% of Kaggle postings). Each
+- **Metro areas**: postings are placed in a metropolitan area by county (FIPS code, or the
+  county name and state Adzuna gives), or else by matching "City, ST" to a metro's
+  principal cities (74% of Kaggle postings). Each
   metro is compared with BLS employment and wages in `metros.csv`, and each metro and
   occupation pair in `metro_occupations.csv`.
 
@@ -105,7 +108,16 @@ matches and about 85% of specialized matches to be the right occupation.
 
 Register for a free key at https://developer.adzuna.com/, then fetch recent postings and
 run the tool on them. Each run adds to the postings history, so after three months of
-fetches the report starts showing rising and falling occupations.
+fetches the report starts showing rising and falling occupations. History is kept per
+feed (`adzuna` or `linkedin`; set another name with `--history-feed`), and trends only
+compare months from the same feed. Different job sites carry different mixes of jobs, so
+mixing them would show the difference between sites rather than change over time.
+
+Adzuna carries many gig-app recruitment ads ("Drive with DoorDash", "Shop, Deliver, Earn
+Cash - Instacart"). These recruit independent contractors, whom BLS employment data
+doesn't cover, so they are counted separately as gig ads instead of matched to an
+occupation. Requests that hit a temporary Adzuna server error are retried, and a page that
+keeps failing is skipped.
 
 ```bash
 export ADZUNA_APP_ID=... ADZUNA_APP_KEY=...

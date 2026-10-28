@@ -166,7 +166,7 @@ def coverage(postings, oews_national):
 
 
 def unmatched_titles(postings, limit=500):
-    counts = postings.loc[postings["soc_code"].isna(), "title"].value_counts()
+    counts = postings.loc[postings["match_method"] == "unmatched", "title"].value_counts()
     return counts.head(limit).rename_axis("title").reset_index(name="postings")
 
 

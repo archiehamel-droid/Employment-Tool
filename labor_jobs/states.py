@@ -24,6 +24,7 @@ STATES = [
 
 ABBRS = {abbr for abbr, _, _ in STATES}
 NAME_TO_ABBR = {name.lower(): abbr for abbr, name, _ in STATES}
+NAME_TO_ABBR.update({"washington, d.c.": "DC", "washington dc": "DC", "washington d.c.": "DC"})
 FIPS_TO_ABBR = {fips: abbr for abbr, _, fips in STATES}
 
 # Total employment in thousands, BLS OEWS May 2024. Used to weight samples

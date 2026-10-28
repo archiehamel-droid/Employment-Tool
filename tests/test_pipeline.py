@@ -269,11 +269,19 @@ def test_history_trends(tmp_path):
         rows += [{"job_id": f"{month}-{k}", "soc_code": s, "state": "CA", "month": month}
                  for k, s in enumerate(socs)]
     postings = pd.DataFrame(rows)
-    assert history.record(postings.drop(columns="month"), postings["month"], db, "a.csv") == 2400
+    assert history.record(postings.drop(columns="month"), postings["month"], db, "a.csv",
+                          "linkedin") == 2400
     # Loading the same postings again adds nothing.
-    assert history.record(postings.drop(columns="month"), postings["month"], db, "a.csv") == 0
+    assert history.record(postings.drop(columns="month"), postings["month"], db, "a.csv",
+                          "linkedin") == 0
+    # A month from another job site doesn't join the trend.
+    other = pd.DataFrame({"job_id": [f"adzuna-{k}" for k in range(600)], "soc_code": "15-1252",
+                          "state": "CA"})
+    assert history.detect_feed(other) == "adzuna" and history.detect_feed(postings) == "linkedin"
+    history.record(other, pd.Series("2024-05", index=other.index), db, "b.csv", "adzuna")
+    assert history.covered_months(history.monthly_counts(db, "adzuna")) == ["2024-05"]
 
-    trend, months = history.trends(history.monthly_counts(db))
+    trend, months = history.trends(history.monthly_counts(db, "linkedin"))
     assert months == ["2024-01", "2024-02", "2024-03", "2024-04"]
     trend = trend.set_index("soc_code")
     assert trend.loc["29-1141", "first_month_share_pct"] == 10.0
@@ -281,7 +289,7 @@ def test_history_trends(tmp_path):
     assert trend.loc["29-1141", "trend_pct_per_month"] > 0 > trend.loc["15-1252", "trend_pct_per_month"]
 
     # Too few months: no trend yet.
-    early = history.monthly_counts(db).query("month < '2024-03'")
+    early = history.monthly_counts(db, "linkedin").query("month < '2024-03'")
     assert history.trends(early)[0].empty
 
 
@@ -420,16 +428,20 @@ def test_metro_placement(tmp_path):
     for name, rows in (("l1.xlsx", list1), ("l2.xlsx", list2)):
         pd.DataFrame(rows).to_excel(tmp_path / name, header=False, index=False)
     by_county, by_city, titles = metros.read_delineations(tmp_path / "l1.xlsx", tmp_path / "l2.xlsx")
-    assert by_county == {"48453": "12420"}  # micropolitan areas left out
+    # Micropolitan areas left out.
+    assert by_county == {"48453": "12420", ("travis county", "48"): "12420"}
 
     postings = pd.DataFrame({
-        "job_id": ["1", "2", "3", "4"], "soc_code": ["15-1252", "15-1252", None, "15-1252"],
-        "annual_salary": [150000, 130000, None, 90000],
-        "location": ["Austin, TX", "Round Rock, TX", "Smalltown, TX", "Remote"],
-        "county_fips": ["48453", None, "48001", None]})
+        "job_id": ["1", "2", "3", "4", "5"], "soc_code": ["15-1252", "15-1252", None, "15-1252", None],
+        "annual_salary": [150000, 130000, None, 90000, None],
+        "location": ["Austin, TX", "Round Rock, TX", "Smalltown, TX", "Remote", "Pflugerville, TX"],
+        "county_fips": ["48453", None, "48001", None, None],
+        "county_name": [None, None, None, None, "Travis County"]})
     postings["metro"] = metros.assign_metros(postings, by_county, by_city)
     assert postings["metro"].tolist()[:2] == ["12420", "12420"]
-    assert postings["metro"].isna().tolist()[2:] == [True, True]
+    assert postings["metro"].isna().tolist()[2:4] == [True, True]
+    assert postings["metro"].iat[4] == "12420"  # placed by county name (as Adzuna gives it)
+    postings = postings.iloc[:4]
 
     oews = pd.DataFrame({"area": ["12420", "12420"], "soc_code": ["00-0000", "15-1252"],
                          "occ_title": ["All", "Software Developers"], "o_group": ["total", "detailed"],
@@ -460,12 +472,14 @@ def test_adzuna_rows_and_paging(tmp_path):
     rows = list(adzuna.fetch("id", "key", pages=5, session=session, pause=0))
     assert session.get.call_count == 2  # stopped when a page came back short
     assert rows[0]["title"] == "Data Scientist" and rows[0]["location"] == "Austin, TX"
+    assert rows[0]["county"] == "Travis County"
     assert rows[-1]["min_salary"] is None  # Adzuna's estimated salary dropped
 
     out = tmp_path / "adzuna.csv"
     pd.DataFrame(rows, columns=adzuna.FIELDS).to_csv(out, index=False)
     loaded = load_postings(out)
     assert loaded["state"].iat[0] == "TX"
+    assert loaded["county_name"].iat[0] == "Travis County"
     assert loaded["annual_salary"].iat[0] == 130000
     assert str(loaded["listed_date"].iat[0]) == "2026-10-20"
 
@@ -519,3 +533,32 @@ def test_adzuna_retries_server_errors_without_leaking_key(monkeypatch):
     limited.get.return_value = mock.Mock(status_code=429)
     with pytest.raises(RuntimeError, match="rate limit"):
         adzuna._get(limited, "https://x/", {})
+
+
+def test_history_files_from_before_feeds_are_upgraded(tmp_path):
+    import sqlite3
+    from labor_jobs import history
+    db = tmp_path / "old.sqlite"
+    with sqlite3.connect(db) as con:
+        con.execute("CREATE TABLE postings (job_id TEXT PRIMARY KEY, month TEXT NOT NULL, "
+                    "soc_code TEXT, state TEXT, source TEXT)")
+        con.executemany("INSERT INTO postings VALUES (?, ?, ?, ?, ?)",
+                        [("123", "2024-04", "15-1252", "CA", "postings.csv"),
+                         ("adzuna-9", "2026-10", "15-1252", "CA", "adzuna.csv")])
+    assert history.monthly_counts(db, "linkedin")["month"].tolist() == ["2024-04"]
+    assert history.monthly_counts(db, "adzuna")["month"].tolist() == ["2026-10"]
+
+
+def test_truck_driver_keyword_and_gig_ads():
+    from labor_jobs.soc_mapping import is_gig
+    ref = pd.DataFrame({"title": ["Software Developers"], "onet_code": ["15-1252.00"]})
+    got = TitleMatcher(ref).map_titles(pd.Series([
+        "Class A CDL Company Driver - 1-5mo EXP Required - OTR - Dry Van - $1.2k per week",
+        "Local Truck Driver - Home Daily", "Screwdriver Assembler"]))
+    assert got["onet_code"].tolist()[:2] == ["53-3032.00", "53-3032.00"]
+    assert got["match_method"].tolist() == ["keyword", "keyword", "unmatched"]
+
+    assert is_gig("Drive with DoorDash - No CDL license needed", "DoorDash")
+    assert is_gig("Repartidor (de tiempo parcial o completo) con DoorDash", "DoorDash")
+    assert not is_gig("Senior Software Engineer, Maps", "Uber")  # a real Uber job
+    assert not is_gig("Delivery Driver", "Sysco")

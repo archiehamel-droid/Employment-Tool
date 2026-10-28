@@ -1,9 +1,9 @@
 """Metropolitan areas: place postings in a metro area and compare them with
 BLS OEWS wages and employment for that metro.
 
-Postings are placed by county (FIPS code) using the Census Bureau's metro
-area delineation file, or failing that by matching "City, ST" to a metro's
-principal cities. OEWS publishes about 390 metropolitan statistical areas,
+Postings are placed by county (FIPS code, or county name and state) using
+the Census Bureau's metro area delineation file, or failing that by matching
+"City, ST" to a metro's principal cities. OEWS publishes about 390 metropolitan statistical areas,
 identified by the same CBSA codes.
 """
 
@@ -27,14 +27,17 @@ def delineation_files(cache_dir, user_agent, year=2023):
 
 
 def read_delineations(list1, list2):
-    """Returns ({county FIPS: cbsa}, {(city, state FIPS): cbsa}, {cbsa: title})
-    for metropolitan (not micropolitan) areas."""
+    """Returns ({county FIPS or (county name, state FIPS): cbsa},
+    {(city, state FIPS): cbsa}, {cbsa: title}) for metropolitan (not
+    micropolitan) areas."""
     counties = pd.read_excel(list1, header=2, dtype=str)
     counties = counties[counties["Metropolitan/Micropolitan Statistical Area"] == METRO]
     cities = pd.read_excel(list2, header=2, dtype=str)
     cities = cities[cities["Metropolitan/Micropolitan Statistical Area"] == METRO]
     by_county = dict(zip(counties["FIPS State Code"] + counties["FIPS County Code"],
                          counties["CBSA Code"]))
+    by_county.update(zip(zip(counties["County/County Equivalent"].str.lower(),
+                             counties["FIPS State Code"]), counties["CBSA Code"]))
     by_city = dict(zip(zip(cities["Principal City Name"].str.lower(), cities["FIPS State Code"]),
                        cities["CBSA Code"]))
     titles = dict(zip(counties["CBSA Code"], counties["CBSA Title"]))
@@ -43,12 +46,19 @@ def read_delineations(list1, list2):
 
 def assign_metros(postings, by_county, by_city):
     """CBSA code per posting, NaN when it can't be placed."""
-    from_county = postings["county_fips"].map(by_county) if "county_fips" in postings \
-        else pd.Series(None, index=postings.index, dtype=object)
+    none = pd.Series(None, index=postings.index, dtype=object)
+    from_county = postings["county_fips"].map(by_county) if "county_fips" in postings else none
     city = postings["location"].str.extract(r"^\s*([^,]+?)\s*,\s*([A-Z]{2})\b")
-    keys = zip(city[0].str.lower(), city[1].map(ABBR_TO_FIPS))
-    from_city = pd.Series([by_city.get(k) for k in keys], index=postings.index)
-    return from_county.fillna(from_city)
+    state_fips = city[1].map(ABBR_TO_FIPS)
+    if "county_name" in postings:
+        names = postings["county_name"].where(postings["county_name"].notna(), "").astype(str)
+        from_name = pd.Series([by_county.get((n.lower(), s)) if n else None
+                               for n, s in zip(names, state_fips)], index=postings.index)
+    else:
+        from_name = none
+    from_city = pd.Series([by_city.get(k) for k in zip(city[0].str.lower(), state_fips)],
+                          index=postings.index)
+    return from_county.fillna(from_name).fillna(from_city)
 
 
 def by_metro(postings, oews_metro, titles):

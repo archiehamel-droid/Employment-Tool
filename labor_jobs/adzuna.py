@@ -40,7 +40,7 @@ from .states import EMPLOYMENT_THOUSANDS, NAME_TO_ABBR, STATES
 API_URL = "https://api.adzuna.com/v1/api/jobs/us/search/{page}"
 CATEGORIES_URL = "https://api.adzuna.com/v1/api/jobs/us/categories"
 MAX_PAGE = 99  # deeper pages repeat page 100
-FIELDS = ["job_id", "title", "company_name", "location", "listed_date", "min_salary",
+FIELDS = ["job_id", "title", "company_name", "location", "county", "listed_date", "min_salary",
           "max_salary", "pay_period", "currency", "work_type", "category", "description",
           "source_url"]
 
@@ -54,6 +54,7 @@ def to_row(result):
     area = result.get("location", {}).get("area", [])
     state = NAME_TO_ABBR.get(area[1].lower()) if len(area) > 1 else None
     city = area[-1] if len(area) > 2 else None
+    county = area[2] if len(area) > 3 else None
     if city and state:
         location = f"{city}, {state}"
     else:
@@ -66,6 +67,7 @@ def to_row(result):
         "title": _clean(result.get("title")),
         "company_name": (result.get("company") or {}).get("display_name"),
         "location": location,
+        "county": county,
         "listed_date": (result.get("created") or "")[:10],
         "min_salary": salary_min,
         "max_salary": salary_max,

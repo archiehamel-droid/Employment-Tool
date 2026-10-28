@@ -10,11 +10,13 @@ of up to 50 postings; the free plan allows a limited number of calls per day,
 so a monthly run of a few hundred pages builds up the postings history.
 
 By default the pages are a sample: split across Adzuna's job categories in
-proportion to how many live postings each has, at random positions in each
-category's results. Taking only the newest pages instead would mostly
-capture whichever employers posted in the last few hours. Adzuna's dates
-reflect when it last indexed a listing, so a fetch is a snapshot of postings
-live at the time.
+proportion to how many postings each has, then across states in proportion
+to their BLS employment, at random positions in each search's results.
+Adzuna serves at most 99 pages per search (later pages repeat page 100), so
+a date-sorted search only reaches the newest few thousand postings, mostly
+from whichever employers posted in the last few hours. Splitting by
+category and state, and using Adzuna's default order, spreads the sample
+across the whole window of --max-days-old days.
 
 Adzuna estimates a salary for postings that don't state one; those estimates
 are dropped so only advertised salaries are used. Descriptions are short
@@ -33,10 +35,11 @@ from pathlib import Path
 
 import requests
 
-from .states import NAME_TO_ABBR
+from .states import EMPLOYMENT_THOUSANDS, NAME_TO_ABBR, STATES
 
 API_URL = "https://api.adzuna.com/v1/api/jobs/us/search/{page}"
 CATEGORIES_URL = "https://api.adzuna.com/v1/api/jobs/us/categories"
+MAX_PAGE = 99  # deeper pages repeat page 100
 FIELDS = ["job_id", "title", "company_name", "location", "listed_date", "min_salary",
           "max_salary", "pay_period", "currency", "work_type", "category", "description",
           "source_url"]
@@ -87,7 +90,7 @@ def _get(session, url, params):
 
 def search(session, app_id, app_key, page, per_page=50, **filters):
     params = {"app_id": app_id, "app_key": app_key, "results_per_page": per_page,
-              "sort_by": "date", "content-type": "application/json"}
+              "content-type": "application/json"}
     params.update({k: v for k, v in filters.items() if v})
     return _get(session, API_URL.format(page=page), params)
 
@@ -99,11 +102,11 @@ def fetch(app_id, app_key, pages, what=None, where=None, max_days_old=31,
     session = session or requests.Session()
     for page in range(1, pages + 1):
         body = search(session, app_id, app_key, page, per_page, what=what, where=where,
-                      max_days_old=max_days_old)
+                      max_days_old=max_days_old, sort_by="date")
         results = body.get("results", [])
         for result in results:
             yield to_row(result)
-        if len(results) < per_page:
+        if len(results) < per_page or page >= MAX_PAGE:
             return
         time.sleep(pause)  # stay under the per-minute limit
 
@@ -128,7 +131,8 @@ def allocate(counts, pages):
 def sample(app_id, app_key, pages, what=None, where=None, max_days_old=31,
            per_page=50, pause=2.5, session=None, seed=None):
     """Yield postings rows from `pages` pages spread across categories in
-    proportion to their live postings, at random positions in each."""
+    proportion to their postings and across states in proportion to their
+    employment (unless `where` fixes the place), at random positions."""
     session = session or requests.Session()
     rng = random.Random(seed)
     auth = {"app_id": app_id, "app_key": app_key}
@@ -139,10 +143,25 @@ def sample(app_id, app_key, pages, what=None, where=None, max_days_old=31,
                       max_days_old=max_days_old, category=tag)
         counts[tag] = int(body.get("count") or 0)
         time.sleep(pause)
+
+    names = {abbr: name for abbr, name, _ in STATES}
+    weights = {names[a]: n for a, n in EMPLOYMENT_THOUSANDS.items()}
+    total_weight = sum(weights.values())
+    seen = set()
     for tag, n_pages in allocate(counts, pages).items():
-        available = max(1, math.ceil(counts[tag] / per_page))
-        for page in sorted(rng.sample(range(1, available + 1), min(n_pages, available))):
-            body = search(session, app_id, app_key, page, per_page, what=what, where=where,
+        for _ in range(n_pages):
+            if where:
+                place, share = where, 1.0
+            else:
+                place = rng.choices(list(weights), list(weights.values()))[0]
+                share = weights[place] / total_weight
+            # Estimated size of this search; pages past its end repeat the last one.
+            last = min(MAX_PAGE, max(1, math.ceil(counts[tag] * share / per_page)))
+            page = rng.randint(1, last)
+            if (tag, place, page) in seen:
+                continue
+            seen.add((tag, place, page))
+            body = search(session, app_id, app_key, page, per_page, what=what, where=place,
                           max_days_old=max_days_old, category=tag)
             for result in body.get("results", []):
                 yield to_row(result)

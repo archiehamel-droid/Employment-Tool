@@ -25,3 +25,15 @@ STATES = [
 ABBRS = {abbr for abbr, _, _ in STATES}
 NAME_TO_ABBR = {name.lower(): abbr for abbr, name, _ in STATES}
 FIPS_TO_ABBR = {fips: abbr for abbr, _, fips in STATES}
+
+# Total employment in thousands, BLS OEWS May 2024. Used to weight samples
+# across states.
+EMPLOYMENT_THOUSANDS = {
+    "AL": 2091, "AK": 321, "AZ": 3197, "AR": 1289, "CA": 18058, "CO": 2891, "CT": 1682, "DE": 476,
+    "DC": 709, "FL": 9820, "GA": 4856, "HI": 621, "ID": 845, "IL": 6065, "IN": 3187, "IA": 1562,
+    "KS": 1431, "KY": 1994, "LA": 1912, "ME": 635, "MD": 2746, "MA": 3643, "MI": 4391, "MN": 2920,
+    "MS": 1160, "MO": 2918, "MT": 510, "NE": 1016, "NV": 1529, "NH": 683, "NJ": 4250, "NM": 861,
+    "NY": 9542, "NC": 4898, "ND": 424, "OH": 5526, "OK": 1692, "OR": 1966, "PA": 6014, "RI": 494,
+    "SC": 2272, "SD": 453, "TN": 3274, "TX": 13847, "UT": 1710, "VT": 304, "VA": 4065, "WA": 3540,
+    "WV": 701, "WI": 2923, "WY": 278,
+}

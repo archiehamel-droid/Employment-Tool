@@ -470,7 +470,7 @@ def test_adzuna_rows_and_paging(tmp_path):
     assert str(loaded["listed_date"].iat[0]) == "2026-10-20"
 
 
-def test_adzuna_sample_spreads_pages_across_categories():
+def test_adzuna_sample_spreads_pages_across_categories_and_states():
     from labor_jobs import adzuna
     assert adzuna.allocate({"it": 600, "sales": 300, "tiny": 1, "empty": 0}, 10) == \
         {"it": 6, "sales": 3, "tiny": 1}
@@ -478,20 +478,24 @@ def test_adzuna_sample_spreads_pages_across_categories():
     def response(body):
         return mock.Mock(status_code=200, json=mock.Mock(return_value=body), raise_for_status=mock.Mock())
 
+    calls = []
+
     def get(url, params, timeout):
         if url.endswith("/categories"):
             return response({"results": [{"tag": "it"}, {"tag": "sales"}]})
         if params["results_per_page"] == 1:
-            return response({"count": {"it": 300, "sales": 100}[params["category"]]})
-        page = int(url.rsplit("/", 1)[1])
-        return response({"results": [{"id": f"{params['category']}-{page}-{i}", "title": "Job",
+            return response({"count": {"it": 3_000_000, "sales": 1_000_000}[params["category"]]})
+        calls.append(params | {"page": int(url.rsplit("/", 1)[1])})
+        key = f"{params['category']}-{params['where']}-{calls[-1]['page']}"
+        return response({"results": [{"id": f"{key}-{i}", "title": "Job",
                                       "location": {"area": ["US", "Ohio", "Franklin County", "Columbus"]}}
                                      for i in range(50)]})
 
     session = mock.Mock()
     session.get.side_effect = get
-    rows = list(adzuna.sample("id", "key", pages=4, session=session, pause=0, seed=1))
-    pages = {r["job_id"].rsplit("-", 1)[0] for r in rows}
-    assert len(rows) == 200
-    assert sum(p.startswith("adzuna-it") for p in pages) == 3  # 3:1 like the category sizes
-    assert sum(p.startswith("adzuna-sales") for p in pages) == 1
+    rows = list(adzuna.sample("id", "key", pages=8, session=session, pause=0, seed=1))
+    assert len(rows) == 400
+    assert [c["category"] for c in calls].count("it") == 6  # 3:1 like the category sizes
+    assert all(c["where"] and "sort_by" not in c and 1 <= c["page"] <= adzuna.MAX_PAGE for c in calls)
+    # Larger states are picked more often, but several are covered.
+    assert len({c["where"] for c in calls}) >= 3

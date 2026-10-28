@@ -468,3 +468,30 @@ def test_adzuna_rows_and_paging(tmp_path):
     assert loaded["state"].iat[0] == "TX"
     assert loaded["annual_salary"].iat[0] == 130000
     assert str(loaded["listed_date"].iat[0]) == "2026-10-20"
+
+
+def test_adzuna_sample_spreads_pages_across_categories():
+    from labor_jobs import adzuna
+    assert adzuna.allocate({"it": 600, "sales": 300, "tiny": 1, "empty": 0}, 10) == \
+        {"it": 6, "sales": 3, "tiny": 1}
+
+    def response(body):
+        return mock.Mock(status_code=200, json=mock.Mock(return_value=body), raise_for_status=mock.Mock())
+
+    def get(url, params, timeout):
+        if url.endswith("/categories"):
+            return response({"results": [{"tag": "it"}, {"tag": "sales"}]})
+        if params["results_per_page"] == 1:
+            return response({"count": {"it": 300, "sales": 100}[params["category"]]})
+        page = int(url.rsplit("/", 1)[1])
+        return response({"results": [{"id": f"{params['category']}-{page}-{i}", "title": "Job",
+                                      "location": {"area": ["US", "Ohio", "Franklin County", "Columbus"]}}
+                                     for i in range(50)]})
+
+    session = mock.Mock()
+    session.get.side_effect = get
+    rows = list(adzuna.sample("id", "key", pages=4, session=session, pause=0, seed=1))
+    pages = {r["job_id"].rsplit("-", 1)[0] for r in rows}
+    assert len(rows) == 200
+    assert sum(p.startswith("adzuna-it") for p in pages) == 3  # 3:1 like the category sizes
+    assert sum(p.startswith("adzuna-sales") for p in pages) == 1

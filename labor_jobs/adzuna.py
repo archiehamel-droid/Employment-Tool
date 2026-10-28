@@ -9,6 +9,13 @@ Needs a free key from https://developer.adzuna.com/, given as --app-id and
 of up to 50 postings; the free plan allows a limited number of calls per day,
 so a monthly run of a few hundred pages builds up the postings history.
 
+By default the pages are a sample: split across Adzuna's job categories in
+proportion to how many live postings each has, at random positions in each
+category's results. Taking only the newest pages instead would mostly
+capture whichever employers posted in the last few hours. Adzuna's dates
+reflect when it last indexed a listing, so a fetch is a snapshot of postings
+live at the time.
+
 Adzuna estimates a salary for postings that don't state one; those estimates
 are dropped so only advertised salaries are used. Descriptions are short
 snippets, so technology counts from Adzuna postings undercount.
@@ -16,7 +23,9 @@ snippets, so technology counts from Adzuna postings undercount.
 
 import argparse
 import csv
+import math
 import os
+import random
 import re
 import sys
 import time
@@ -27,6 +36,7 @@ import requests
 from .states import NAME_TO_ABBR
 
 API_URL = "https://api.adzuna.com/v1/api/jobs/us/search/{page}"
+CATEGORIES_URL = "https://api.adzuna.com/v1/api/jobs/us/categories"
 FIELDS = ["job_id", "title", "company_name", "location", "listed_date", "min_salary",
           "max_salary", "pay_period", "currency", "work_type", "category", "description",
           "source_url"]
@@ -65,31 +75,78 @@ def to_row(result):
     }
 
 
+def _get(session, url, params):
+    resp = session.get(url, params=params, timeout=60)
+    if resp.status_code in (401, 403):
+        raise RuntimeError("Adzuna rejected the app ID or key (HTTP %d)" % resp.status_code)
+    if resp.status_code == 429:
+        raise RuntimeError("Adzuna rate limit reached; run again later or with fewer --pages")
+    resp.raise_for_status()
+    return resp.json()
+
+
+def search(session, app_id, app_key, page, per_page=50, **filters):
+    params = {"app_id": app_id, "app_key": app_key, "results_per_page": per_page,
+              "sort_by": "date", "content-type": "application/json"}
+    params.update({k: v for k, v in filters.items() if v})
+    return _get(session, API_URL.format(page=page), params)
+
+
 def fetch(app_id, app_key, pages, what=None, where=None, max_days_old=31,
           per_page=50, pause=2.5, session=None):
-    """Yield postings rows, newest first, stopping early if results run out."""
+    """Yield postings rows from the first `pages` pages, newest first,
+    stopping early if results run out."""
     session = session or requests.Session()
     for page in range(1, pages + 1):
-        params = {"app_id": app_id, "app_key": app_key, "results_per_page": per_page,
-                  "max_days_old": max_days_old, "sort_by": "date",
-                  "content-type": "application/json"}
-        if what:
-            params["what"] = what
-        if where:
-            params["where"] = where
-        resp = session.get(API_URL.format(page=page), params=params, timeout=60)
-        if resp.status_code in (401, 403):
-            raise RuntimeError("Adzuna rejected the app ID or key (HTTP %d)" % resp.status_code)
-        if resp.status_code == 429:
-            raise RuntimeError(f"Adzuna rate limit reached after {page - 1} pages; "
-                               "run again later with fewer --pages")
-        resp.raise_for_status()
-        results = resp.json().get("results", [])
+        body = search(session, app_id, app_key, page, per_page, what=what, where=where,
+                      max_days_old=max_days_old)
+        results = body.get("results", [])
         for result in results:
             yield to_row(result)
         if len(results) < per_page:
             return
         time.sleep(pause)  # stay under the per-minute limit
+
+
+def allocate(counts, pages):
+    """Pages per category, proportional to its postings, at least one for
+    any category with postings (largest remainders get the leftovers)."""
+    total = sum(counts.values())
+    if not total:
+        return {}
+    shares = {c: pages * n / total for c, n in counts.items() if n}
+    alloc = {c: max(1, math.floor(s)) for c, s in shares.items()}
+    leftover = pages - sum(alloc.values())
+    for c in sorted(shares, key=lambda c: shares[c] - math.floor(shares[c]), reverse=True):
+        if leftover <= 0:
+            break
+        alloc[c] += 1
+        leftover -= 1
+    return alloc
+
+
+def sample(app_id, app_key, pages, what=None, where=None, max_days_old=31,
+           per_page=50, pause=2.5, session=None, seed=None):
+    """Yield postings rows from `pages` pages spread across categories in
+    proportion to their live postings, at random positions in each."""
+    session = session or requests.Session()
+    rng = random.Random(seed)
+    auth = {"app_id": app_id, "app_key": app_key}
+    tags = [c["tag"] for c in _get(session, CATEGORIES_URL, auth).get("results", [])]
+    counts = {}
+    for tag in tags:  # one small call each to size the categories
+        body = search(session, app_id, app_key, 1, 1, what=what, where=where,
+                      max_days_old=max_days_old, category=tag)
+        counts[tag] = int(body.get("count") or 0)
+        time.sleep(pause)
+    for tag, n_pages in allocate(counts, pages).items():
+        available = max(1, math.ceil(counts[tag] / per_page))
+        for page in sorted(rng.sample(range(1, available + 1), min(n_pages, available))):
+            body = search(session, app_id, app_key, page, per_page, what=what, where=where,
+                          max_days_old=max_days_old, category=tag)
+            for result in body.get("results", []):
+                yield to_row(result)
+            time.sleep(pause)
 
 
 def main(argv=None):
@@ -101,6 +158,9 @@ def main(argv=None):
     p.add_argument("--what", help="keywords, e.g. 'data scientist' (default: all jobs)")
     p.add_argument("--where", help="place, e.g. 'Texas' (default: all of the US)")
     p.add_argument("--max-days-old", type=int, default=31)
+    p.add_argument("--newest", action="store_true",
+                   help="take the newest pages instead of a sample across categories")
+    p.add_argument("--seed", type=int, help="random seed for the sample")
     p.add_argument("--out", required=True, help="CSV file to write")
     args = p.parse_args(argv)
     if not (args.app_id and args.app_key):
@@ -114,8 +174,13 @@ def main(argv=None):
         writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
         try:
-            for row in fetch(args.app_id, args.app_key, args.pages, args.what, args.where,
-                             args.max_days_old):
+            if args.newest:
+                rows = fetch(args.app_id, args.app_key, args.pages, args.what, args.where,
+                             args.max_days_old)
+            else:
+                rows = sample(args.app_id, args.app_key, args.pages, args.what, args.where,
+                              args.max_days_old, seed=args.seed)
+            for row in rows:
                 if row["job_id"] not in seen:
                     seen.add(row["job_id"])
                     writer.writerow(row)

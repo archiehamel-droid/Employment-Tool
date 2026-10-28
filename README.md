@@ -113,8 +113,14 @@ python -m labor_jobs.adzuna --pages 200 --out data/adzuna/2026-10.csv
 python -m labor_jobs --postings data/adzuna/2026-10.csv
 ```
 
-Each page is one API call of up to 50 postings, made newest first from the last 31 days.
-`--what "data scientist"` or `--where Texas` narrow the search. Adzuna estimates salaries
+Each page is one API call of up to 50 postings. By default the pages are a sample: split
+across Adzuna's 30 job categories in proportion to how many live postings each has, taken
+at random positions in each category's results. Taking only the newest pages would mostly
+capture whichever employers posted in the last few hours, often big trucking and staffing
+advertisers. `--newest` does that anyway, `--seed` makes a sample repeatable, and
+`--what "data scientist"` or `--where Texas` narrow the search. Sizing the categories costs
+30 small calls per run. Adzuna's dates reflect when it last indexed a listing, so each fetch
+is a snapshot of postings live at the time, and the history counts it under that month. Adzuna estimates salaries
 for postings that don't state one; those estimates are dropped. Adzuna descriptions are
 short snippets, so technology counts from them undercount.
 

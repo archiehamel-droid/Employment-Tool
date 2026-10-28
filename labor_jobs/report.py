@@ -33,7 +33,7 @@ def build_report(cov, occupations, states, sources, extras=None, top=15, min_pos
     n = cov["postings"]
     methods = ", ".join(f"{k} {v:,}" for k, v in cov["matched_by_method"].items())
     out = [
-        "# BLS employment vs LinkedIn job postings",
+        "# BLS employment vs job postings",
         "",
         "## Sources",
         *[f"- {s}" for s in sources],
@@ -64,7 +64,7 @@ def build_report(cov, occupations, states, sources, extras=None, top=15, min_pos
         }),
         "",
         "Demand index = share of postings / share of national employment. "
-        "Above 1 means the occupation is over-represented in LinkedIn postings.",
+        "Above 1 means the occupation is over-represented in these postings.",
         "",
     ]
 
@@ -93,7 +93,7 @@ def build_report(cov, occupations, states, sources, extras=None, top=15, min_pos
                 "median_posted_salary": "Posted median $", "a_median": "BLS median $",
                 "posted_vs_oews_median_pct": "Gap %"}),
             "",
-            "Postings that list a salary are not a random sample, and LinkedIn skews "
+            "Postings that list a salary are not a random sample, and job sites skew "
             "toward white-collar roles, so read gaps as indicative only.",
             "",
         ]

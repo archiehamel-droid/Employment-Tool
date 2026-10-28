@@ -141,6 +141,7 @@ def main(argv=None):
         print("Loading H-1B wage filings...")
         paths = args.h1b_files or h1b.h1b_files(args.cache, args.h1b_year, user_agent)
         filings = h1b.read_h1b(paths)
+        filings["soc_code"] = merge.to_bls_soc(filings["soc_code"])
         employer_titles = h1b.reference_titles(filings)
         sources.append(f"DOL H-1B/LCA disclosure data, fiscal year {args.h1b_year} "
                        f"({len(filings):,} certified full-time filings)")
@@ -151,6 +152,7 @@ def main(argv=None):
     gig = [is_gig(t, c) for t, c in zip(postings["title"], postings["company_name"])]
     postings.loc[gig, ["onet_code", "soc_code"]] = None
     postings.loc[gig, "match_method"] = "gig"
+    postings["soc_code"] = merge.to_bls_soc(postings["soc_code"])
 
     mentions = None
     if "description" in postings and technologies is not None:
@@ -231,7 +233,7 @@ def main(argv=None):
 
     if not args.no_history:
         feed = args.history_feed or history.detect_feed(postings)
-        added = history.record(postings, merge.posting_months(postings), args.history,
+        added = history.record(postings, merge.history_months(postings), args.history,
                                "; ".join(args.postings), feed)
         counts = history.monthly_counts(args.history, feed)
         trend, months = history.trends(counts)

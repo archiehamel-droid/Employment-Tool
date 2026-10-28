@@ -58,7 +58,7 @@ def record(postings, months, db_path, source, feed):
         con.executemany(
             "INSERT INTO postings (job_id, month, soc_code, state, source, feed) "
             "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE "
-            "SET soc_code = excluded.soc_code, state = excluded.state",
+            "SET soc_code = excluded.soc_code, state = excluded.state, month = excluded.month",
             [(*r, str(source), feed) for r in rows.itertuples(index=False)])
         after = con.execute("SELECT COUNT(*) FROM postings").fetchone()[0]
     return after - before

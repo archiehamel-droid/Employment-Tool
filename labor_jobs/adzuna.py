@@ -31,6 +31,7 @@ import random
 import re
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 import requests
@@ -40,7 +41,8 @@ from .states import EMPLOYMENT_THOUSANDS, NAME_TO_ABBR, STATES
 API_URL = "https://api.adzuna.com/v1/api/jobs/us/search/{page}"
 CATEGORIES_URL = "https://api.adzuna.com/v1/api/jobs/us/categories"
 MAX_PAGE = 99  # deeper pages repeat page 100
-FIELDS = ["job_id", "title", "company_name", "location", "county", "listed_date", "min_salary",
+FIELDS = ["job_id", "title", "company_name", "location", "county", "listed_date", "fetched_date",
+          "min_salary",
           "max_salary", "pay_period", "currency", "work_type", "category", "description",
           "source_url"]
 
@@ -60,8 +62,9 @@ def to_row(result):
     else:
         location = result.get("location", {}).get("display_name", "")
     predicted = str(result.get("salary_is_predicted", "0")) == "1"
-    salary_min = None if predicted else result.get("salary_min")
-    salary_max = None if predicted else result.get("salary_max")
+    # Adzuna gives 0 for an unstated end of a range.
+    salary_min = None if predicted else (result.get("salary_min") or None)
+    salary_max = None if predicted else (result.get("salary_max") or None)
     return {
         "job_id": f"adzuna-{result['id']}",
         "title": _clean(result.get("title")),
@@ -69,6 +72,8 @@ def to_row(result):
         "location": location,
         "county": county,
         "listed_date": (result.get("created") or "")[:10],
+        # A fetch is a snapshot of live postings; history files it under this date.
+        "fetched_date": date.today().isoformat(),
         "min_salary": salary_min,
         "max_salary": salary_max,
         "pay_period": "YEARLY" if salary_min or salary_max else None,

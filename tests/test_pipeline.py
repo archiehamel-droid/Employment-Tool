@@ -562,3 +562,30 @@ def test_truck_driver_keyword_and_gig_ads():
     assert is_gig("Repartidor (de tiempo parcial o completo) con DoorDash", "DoorDash")
     assert not is_gig("Senior Software Engineer, Maps", "Uber")  # a real Uber job
     assert not is_gig("Delivery Driver", "Sysco")
+
+
+def test_snapshot_feeds_file_history_under_fetch_month():
+    from labor_jobs.merge import history_months
+    postings = pd.DataFrame({"listed_date": ["2026-09-28", "2026-10-20", "2024-04-02"],
+                             "fetched_date": ["2026-10-28", "2026-10-28", None]})
+    assert history_months(postings).tolist() == ["2026-10", "2026-10", "2024-04"]
+    assert history_months(postings.drop(columns="fetched_date")).tolist() == \
+        ["2026-09", "2026-10", "2024-04"]
+
+
+def test_zero_salary_ends_bls_combined_codes_and_unpublished_months():
+    from labor_jobs.merge import state_unemployment, to_bls_soc
+    df = pd.DataFrame({"pay_period": ["YEARLY", "YEARLY"], "min_salary": [0, 90000],
+                       "max_salary": [110000, 0]})
+    assert annual_salary(df).tolist() == [110000, 90000]  # not halved by a 0
+
+    assert to_bls_soc(pd.Series(["21-1014", "15-1252", None])).tolist()[:2] == ["21-1018", "15-1252"]
+
+    postings = pd.DataFrame({"state": ["CA", "CA", "TX"], "job_id": ["1", "2", "3"],
+                             "listed_date": ["2026-09-28", "2026-10-20", "2026-10-21"]})
+    monthly = pd.DataFrame({"state": ["CA", "TX"], "month": ["2026-09", "2026-09"],
+                            "unemployment_rate": [5.5, 4.1]})
+    got = state_unemployment(postings, monthly).set_index("state")
+    # October isn't published yet, so October postings use September.
+    assert got.loc["TX", "unemployment_rate"] == 4.1
+    assert got.loc["CA", "unemployment_period"] == "2026-09"

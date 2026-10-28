@@ -4,6 +4,27 @@ import pandas as pd
 
 OEWS_FIELDS = ["soc_code", "occ_title", "tot_emp", "a_median", "a_mean"]
 
+# SOC occupations that BLS OEWS publishes only combined with others. O*NET
+# (and so the title matching and H-1B data) keeps them separate; for joining
+# BLS figures they use the combined code.
+OEWS_COMBINED = {
+    "21-1011": "21-1018", "21-1014": "21-1018",  # substance abuse / mental health counselors
+    "13-1021": "13-1020", "13-1022": "13-1020", "13-1023": "13-1020",  # buyers, purchasing agents
+    "53-1042": "53-1047", "53-1043": "53-1047", "53-1044": "53-1047",  # transport supervisors
+    "29-2011": "29-2010", "29-2012": "29-2010",  # clinical lab technologists / technicians
+    "51-2022": "51-2028", "51-2023": "51-2028",  # electrical and electronic assemblers
+    "25-2055": "25-2052", "25-2056": "25-2052",  # special education, kindergarten / elementary
+    "51-2092": "51-2090",  # team assemblers
+    "31-1121": "31-1120", "31-1122": "31-1120",  # home health / personal care aides
+    "13-2021": "13-2020", "13-2022": "13-2020", "13-2023": "13-2020",  # appraisers, assessors
+    "25-9042": "25-9045", "25-9043": "25-9045",  # teaching assistants
+}
+
+
+def to_bls_soc(codes):
+    """SOC codes as BLS OEWS publishes them."""
+    return codes.map(lambda c: OEWS_COMBINED.get(c, c) if isinstance(c, str) else c)
+
 
 def _posting_stats(postings, keys):
     return (postings.groupby(keys)
@@ -61,11 +82,28 @@ def posting_months(postings):
     return dates.dt.strftime("%Y-%m")
 
 
+def history_months(postings):
+    """Month to file each posting under in the history: when the postings
+    were fetched, for snapshot feeds like Adzuna, otherwise when listed.
+    Filing a snapshot by listing date would split it into a full current
+    month and a sliver of the previous one."""
+    listed = posting_months(postings)
+    if "fetched_date" not in postings:
+        return listed
+    fetched = pd.to_datetime(postings["fetched_date"], errors="coerce").dt.strftime("%Y-%m")
+    return fetched.fillna(listed)
+
+
 def state_unemployment(postings, monthly):
     """Unemployment rate per state for the months the postings were listed:
     the average of the monthly rates, weighted by that state's postings per
     month. Falls back to the latest month when postings have no dates."""
     months = posting_months(postings)
+    # Months BLS hasn't published yet use the latest published month.
+    available = sorted(monthly["month"].unique())
+    if available:
+        months = months.map(lambda m: m if not isinstance(m, str) or m in available
+                            else max((a for a in available if a <= m), default=None))
     weights = (postings.assign(month=months).dropna(subset=["state", "month"])
                .groupby(["state", "month"]).size().rename("weight").reset_index())
     if weights.empty:

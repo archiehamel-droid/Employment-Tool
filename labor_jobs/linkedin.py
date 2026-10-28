@@ -42,9 +42,14 @@ def parse_state(location, fips=None):
 def annual_salary(df):
     """Annualized salary in USD, NaN when unknown or implausible."""
     def num(col):
-        return pd.to_numeric(df[col], errors="coerce") if col in df else pd.Series(float("nan"), index=df.index)
+        if col not in df:
+            return pd.Series(float("nan"), index=df.index)
+        values = pd.to_numeric(df[col], errors="coerce")
+        return values.where(values > 0)  # Adzuna gives 0 for "not stated"
 
-    midpoint = num("med_salary").fillna((num("min_salary") + num("max_salary")) / 2)
+    # Midpoint of the range, or whichever end is given.
+    ends = pd.concat([num("min_salary"), num("max_salary")], axis=1).mean(axis=1)
+    midpoint = num("med_salary").fillna(ends)
     if "pay_period" in df:
         midpoint = midpoint * df["pay_period"].str.upper().map(PAY_PERIOD_HOURS)
     else:
@@ -92,6 +97,8 @@ def load_postings(path, descriptions=False):
         if "skills_desc" in df:
             text = text + "\n" + df["skills_desc"].fillna("")
         out["description"] = text
+    if "fetched_date" in df:
+        out["fetched_date"] = pd.to_datetime(df["fetched_date"], errors="coerce").dt.date
     if "listed_time" in df:
         out["listed_date"] = pd.to_datetime(
             pd.to_numeric(df["listed_time"], errors="coerce"), unit="ms").dt.date

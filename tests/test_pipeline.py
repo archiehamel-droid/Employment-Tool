@@ -499,3 +499,23 @@ def test_adzuna_sample_spreads_pages_across_categories_and_states():
     assert all(c["where"] and "sort_by" not in c and 1 <= c["page"] <= adzuna.MAX_PAGE for c in calls)
     # Larger states are picked more often, but several are covered.
     assert len({c["where"] for c in calls}) >= 3
+
+
+def test_adzuna_retries_server_errors_without_leaking_key(monkeypatch):
+    from labor_jobs import adzuna
+    monkeypatch.setattr(adzuna.time, "sleep", lambda s: None)
+    ok = mock.Mock(status_code=200, json=mock.Mock(return_value={"results": []}))
+    flaky = mock.Mock()
+    flaky.get.side_effect = [mock.Mock(status_code=503), adzuna.requests.Timeout("secret-key"), ok]
+    assert adzuna._get(flaky, "https://x/?app_key=secret-key", {}) == {"results": []}
+
+    down = mock.Mock()
+    down.get.return_value = mock.Mock(status_code=503)
+    with pytest.raises(adzuna.PageFailed) as err:
+        adzuna._get(down, "https://x/?app_key=secret-key", {"app_key": "secret-key"})
+    assert "secret-key" not in str(err.value) and "4 tries" in str(err.value)
+
+    limited = mock.Mock()
+    limited.get.return_value = mock.Mock(status_code=429)
+    with pytest.raises(RuntimeError, match="rate limit"):
+        adzuna._get(limited, "https://x/", {})

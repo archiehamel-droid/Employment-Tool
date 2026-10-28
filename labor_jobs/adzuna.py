@@ -78,14 +78,31 @@ def to_row(result):
     }
 
 
-def _get(session, url, params):
-    resp = session.get(url, params=params, timeout=60)
-    if resp.status_code in (401, 403):
-        raise RuntimeError("Adzuna rejected the app ID or key (HTTP %d)" % resp.status_code)
-    if resp.status_code == 429:
-        raise RuntimeError("Adzuna rate limit reached; run again later or with fewer --pages")
-    resp.raise_for_status()
-    return resp.json()
+class PageFailed(Exception):
+    """One request kept failing; the caller can skip it and carry on."""
+
+
+def _get(session, url, params, retries=3, backoff=5):
+    """GET with retries for Adzuna's occasional 5xx errors and timeouts.
+    Errors never include the request URL, which carries the API key."""
+    for attempt in range(retries + 1):
+        try:
+            resp = session.get(url, params=params, timeout=60)
+        except requests.RequestException as exc:
+            problem = type(exc).__name__
+        else:
+            if resp.status_code in (401, 403):
+                raise RuntimeError("Adzuna rejected the app ID or key (HTTP %d)" % resp.status_code)
+            if resp.status_code == 429:
+                raise RuntimeError("Adzuna rate limit reached; run again later or with fewer --pages")
+            if resp.status_code < 500:
+                if resp.status_code >= 400:
+                    raise PageFailed(f"HTTP {resp.status_code}")
+                return resp.json()
+            problem = f"HTTP {resp.status_code}"
+        if attempt < retries:
+            time.sleep(backoff * 2 ** attempt)
+    raise PageFailed(f"{problem} after {retries + 1} tries")
 
 
 def search(session, app_id, app_key, page, per_page=50, **filters):
@@ -139,8 +156,12 @@ def sample(app_id, app_key, pages, what=None, where=None, max_days_old=31,
     tags = [c["tag"] for c in _get(session, CATEGORIES_URL, auth).get("results", [])]
     counts = {}
     for tag in tags:  # one small call each to size the categories
-        body = search(session, app_id, app_key, 1, 1, what=what, where=where,
-                      max_days_old=max_days_old, category=tag)
+        try:
+            body = search(session, app_id, app_key, 1, 1, what=what, where=where,
+                          max_days_old=max_days_old, category=tag)
+        except PageFailed as exc:
+            print(f"  couldn't size {tag}, leaving it out: {exc}")
+            body = {}
         counts[tag] = int(body.get("count") or 0)
         time.sleep(pause)
 
@@ -161,8 +182,12 @@ def sample(app_id, app_key, pages, what=None, where=None, max_days_old=31,
             if (tag, place, page) in seen:
                 continue
             seen.add((tag, place, page))
-            body = search(session, app_id, app_key, page, per_page, what=what, where=place,
-                          max_days_old=max_days_old, category=tag)
+            try:
+                body = search(session, app_id, app_key, page, per_page, what=what, where=place,
+                              max_days_old=max_days_old, category=tag)
+            except PageFailed as exc:
+                print(f"  skipped {tag} / {place} page {page}: {exc}")
+                continue
             for result in body.get("results", []):
                 yield to_row(result)
             time.sleep(pause)
@@ -203,7 +228,7 @@ def main(argv=None):
                 if row["job_id"] not in seen:
                     seen.add(row["job_id"])
                     writer.writerow(row)
-        except RuntimeError as exc:  # keep what was fetched before the error
+        except (RuntimeError, PageFailed) as exc:  # keep what was fetched before the error
             print(f"Stopped early: {exc}")
     print(f"Wrote {len(seen):,} postings to {out}")
 

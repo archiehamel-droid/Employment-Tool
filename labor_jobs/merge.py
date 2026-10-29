@@ -199,6 +199,9 @@ def coverage(postings, oews_national):
                                     & ~postings["onet_code"].fillna("").str.endswith(".00")).sum()),
         "occupations_found": int(postings["onet_code"].nunique()),
         "matched_by_method": {k: int(v) for k, v in methods.items()},
+        "by_source": {k: int(v) for k, v in postings["source"].value_counts().items()}
+        if "source" in postings else {},
+        "merged_duplicates": int(postings.attrs.get("merged_duplicates", 0)),
         "soc_in_oews": int(postings["soc_code"].isin(oews_codes).sum()),
     }
 

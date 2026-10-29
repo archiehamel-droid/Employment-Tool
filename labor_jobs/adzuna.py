@@ -24,7 +24,6 @@ snippets, so technology counts from Adzuna postings undercount.
 """
 
 import argparse
-import csv
 import math
 import os
 import random
@@ -32,19 +31,15 @@ import re
 import sys
 import time
 from datetime import date
-from pathlib import Path
 
 import requests
 
+from .feeds import FIELDS, write_rows  # noqa: F401  (FIELDS is the file layout)
 from .states import EMPLOYMENT_THOUSANDS, NAME_TO_ABBR, STATES
 
 API_URL = "https://api.adzuna.com/v1/api/jobs/us/search/{page}"
 CATEGORIES_URL = "https://api.adzuna.com/v1/api/jobs/us/categories"
 MAX_PAGE = 99  # deeper pages repeat page 100
-FIELDS = ["job_id", "title", "company_name", "location", "county", "listed_date", "fetched_date",
-          "min_salary",
-          "max_salary", "pay_period", "currency", "work_type", "category", "description",
-          "source_url"]
 
 
 def _clean(text):
@@ -77,6 +72,7 @@ def to_row(result):
     salary_max = None if predicted else (result.get("salary_max") or None)
     return {
         "job_id": f"adzuna-{result['id']}",
+        "source": "adzuna",
         "title": _clean(result.get("title")),
         "company_name": (result.get("company") or {}).get("display_name"),
         "location": location,
@@ -223,31 +219,29 @@ def main(argv=None):
                    help="take the newest pages instead of a sample across categories")
     p.add_argument("--seed", type=int, help="random seed for the sample")
     p.add_argument("--out", required=True, help="CSV file to write")
+    p.add_argument("--append", action="store_true",
+                   help="add to an existing file, skipping postings already in it; use this to "
+                        "spread a month's fetch over several days within Adzuna's daily limit")
     args = p.parse_args(argv)
     if not (args.app_id and args.app_key):
         sys.exit("Set --app-id and --app-key (or ADZUNA_APP_ID / ADZUNA_APP_KEY). "
                  "Register free at https://developer.adzuna.com/")
 
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    seen = set()
-    with out.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader()
-        try:
-            if args.newest:
-                rows = fetch(args.app_id, args.app_key, args.pages, args.what, args.where,
-                             args.max_days_old)
-            else:
-                rows = sample(args.app_id, args.app_key, args.pages, args.what, args.where,
-                              args.max_days_old, seed=args.seed)
-            for row in rows:
-                if row["job_id"] not in seen:
-                    seen.add(row["job_id"])
-                    writer.writerow(row)
-        except (RuntimeError, PageFailed) as exc:  # keep what was fetched before the error
-            print(f"Stopped early: {exc}")
-    print(f"Wrote {len(seen):,} postings to {out}")
+    if args.newest:
+        rows = fetch(args.app_id, args.app_key, args.pages, args.what, args.where, args.max_days_old)
+    else:
+        rows = sample(args.app_id, args.app_key, args.pages, args.what, args.where,
+                      args.max_days_old, seed=args.seed)
+    added = write_rows(_until_error(rows), args.out, args.append)
+    print(f"Wrote {added:,} new postings to {args.out}")
+
+
+def _until_error(rows):
+    """Pass rows through, stopping (and keeping what came before) on an error."""
+    try:
+        yield from rows
+    except (RuntimeError, PageFailed) as exc:
+        print(f"Stopped early: {exc}")
 
 
 if __name__ == "__main__":

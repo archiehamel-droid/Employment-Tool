@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 
-from . import bls, h1b, history, jolts, merge, metros, projections, report, skills
+from . import bls, h1b, history, jolts, merge, metros, perm, projections, report, skills
 from .matching import build_matcher
 from .linkedin import load_all
 from .soc_mapping import is_gig, load_onet_titles, load_title_overrides
@@ -18,8 +18,9 @@ def parse_args(argv=None):
         prog="labor_jobs",
         description="Combine BLS employment statistics with LinkedIn job postings.")
     p.add_argument("--postings", required=True, nargs="+",
-                   help="postings.csv from the Kaggle LinkedIn Job Postings dataset, or "
-                        "several postings files (e.g. monthly exports)")
+                   help="one or more postings files: the Kaggle LinkedIn postings.csv and/or "
+                        "files from labor_jobs.adzuna, labor_jobs.usajobs and labor_jobs.ats. "
+                        "The same job found in several sources is counted once")
     p.add_argument("--out", default="output", help="output directory (default: output)")
     p.add_argument("--cache", default="data/cache", help="download cache directory")
     p.add_argument("--contact-email", default=os.environ.get("BLS_CONTACT_EMAIL"),
@@ -60,8 +61,12 @@ def parse_args(argv=None):
     p.add_argument("--no-history", action="store_true",
                    help="don't record postings or report posting trends")
     p.add_argument("--history-feed",
-                   help="name of the postings source for trends, e.g. 'linkedin' (default: "
-                        "'adzuna' for files from labor_jobs.adzuna, otherwise 'linkedin')")
+                   help="record all postings under this source name for trends (default: each "
+                        "posting's own source: linkedin, adzuna, usajobs, greenhouse, lever, ashby)")
+    p.add_argument("--perm-year", type=int, default=2024,
+                   help="fiscal year of PERM green-card wage filings (default 2024)")
+    p.add_argument("--perm-files", nargs="+", help="local PERM disclosure files instead of downloading")
+    p.add_argument("--skip-perm", action="store_true", help="leave out PERM green-card wages")
     p.add_argument("--h1b-year", type=int, default=2024,
                    help="federal fiscal year of H-1B wage filings (Oct-Sep; default 2024 "
                         "to match the Kaggle postings)")
@@ -94,9 +99,13 @@ def main(argv=None):
     sources.append(f"BLS OEWS state file: {state_path}")
     sources.append(f"BLS OEWS national file: {nat_path}")
 
-    print("Loading LinkedIn postings...")
+    print("Loading postings...")
     postings = load_all(args.postings, descriptions=not args.skip_posting_skills)
-    sources.append(f"LinkedIn postings: {', '.join(args.postings)} ({len(postings):,} rows)")
+    by_source = ", ".join(f"{s} {n:,}" for s, n in postings["source"].value_counts().items())
+    merged = postings.attrs.get("merged_duplicates", 0)
+    sources.append(f"Postings: {', '.join(args.postings)} ({len(postings):,}: {by_source}"
+                   + (f"; {merged:,} duplicates of these in other sources merged" if merged else "")
+                   + ")")
 
     unemployment = None
     if not args.skip_unemployment:
@@ -144,6 +153,20 @@ def main(argv=None):
     postings.loc[gig, "match_method"] = "gig"
     postings["soc_code"] = merge.to_bls_soc(postings["soc_code"])
 
+    green_cards = None
+    if not args.skip_perm:
+        print("Loading PERM green-card wage filings...")
+        paths = args.perm_files or perm.perm_files(args.cache, args.perm_year, user_agent)
+        green_cards = perm.read_perm(paths)
+        # New-form filings have no occupation code: match their job titles.
+        uncoded = green_cards["onet_code"].isna()
+        green_cards.loc[uncoded, "onet_code"] = matcher.map_titles(
+            green_cards.loc[uncoded, "job_title"])["onet_code"]
+        green_cards = green_cards.dropna(subset=["onet_code"])
+        green_cards["soc_code"] = merge.to_bls_soc(green_cards["onet_code"].str[:7])
+        sources.append(f"DOL PERM green-card disclosure data, fiscal year {args.perm_year} "
+                       f"({len(green_cards):,} certified filings with an occupation)")
+
     mentions = None
     if "description" in postings and technologies is not None:
         print("Finding technologies mentioned in posting descriptions...")
@@ -178,6 +201,14 @@ def main(argv=None):
         state_occ = state_occ.merge(h1b.summarize(filings, ["state", "soc_code"]),
                                     on=["state", "soc_code"], how="left")
         extras["h1b"] = (detailed, args.h1b_year)
+    if green_cards is not None:
+        detailed = detailed.merge(h1b.summarize(green_cards, "onet_code", "perm"), on="onet_code", how="left")
+        occupations = occupations.merge(h1b.summarize(green_cards, "soc_code", "perm"),
+                                        on="soc_code", how="left")
+        state_occ = state_occ.merge(h1b.summarize(green_cards, ["state", "soc_code"], "perm"),
+                                    on=["state", "soc_code"], how="left")
+        if "h1b" in extras:
+            extras["h1b"] = (detailed, args.h1b_year)
     detailed.to_csv(out / "detailed_occupations.csv", index=False)
     extras["detailed"] = detailed
 
@@ -222,10 +253,11 @@ def main(argv=None):
             print(f"  skipped: {exc}")
 
     if not args.no_history:
-        feed = args.history_feed or history.detect_feed(postings)
+        feed = args.history_feed or postings["source"]
+        feeds = [feed] if isinstance(feed, str) else sorted(feed.dropna().unique())
         added = history.record(postings, merge.history_months(postings), args.history,
                                "; ".join(args.postings), feed)
-        counts = history.monthly_counts(args.history, feed)
+        counts = history.monthly_counts(args.history, feeds)
         trend, months = history.trends(counts)
         if len(trend):
             titles = oews_national[["soc_code", "occ_title"]]
@@ -233,7 +265,7 @@ def main(argv=None):
             trend.to_csv(out / "posting_trends.csv", index=False)
         else:
             (out / "posting_trends.csv").unlink(missing_ok=True)
-        extras["history"] = (trend, months, args.history, added, feed)
+        extras["history"] = (trend, months, args.history, added, " + ".join(feeds))
         print(f"  history: {added:,} new postings recorded; "
               f"{len(months)} month(s) with enough postings to compare")
 

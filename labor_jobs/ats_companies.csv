@@ -1,0 +1,113 @@
+platform,board,name
+ashby,airbyte,Airbyte
+ashby,benchling,Benchling
+ashby,character,Character.AI
+ashby,clerk,Clerk
+ashby,cohere,Cohere
+ashby,cursor,Cursor
+ashby,harvey,Harvey
+ashby,hex,Hex
+ashby,linear,Linear
+ashby,modal,Modal
+ashby,notion,Notion
+ashby,openai,OpenAI
+ashby,perplexity,Perplexity
+ashby,pinecone,Pinecone
+ashby,plaid,Plaid
+ashby,posthog,PostHog
+ashby,ramp,Ramp
+ashby,replit,Replit
+ashby,runway,Runway
+ashby,sierra,Sierra
+ashby,supabase,Supabase
+ashby,weaviate,Weaviate
+ashby,zapier,Zapier
+greenhouse,2u,2U
+greenhouse,abnormalsecurity,Abnormal Security
+greenhouse,affirm,Affirm
+greenhouse,airbnb,Airbnb
+greenhouse,airtable,Airtable
+greenhouse,anthropic,Anthropic
+greenhouse,asana,Asana
+greenhouse,astranis,Astranis
+greenhouse,axios,Axios
+greenhouse,betterment,Betterment
+greenhouse,blend,Blend
+greenhouse,brex,Brex
+greenhouse,calm,Calm.com
+greenhouse,carvana,Carvana
+greenhouse,chime,"Chime Financial, Inc"
+greenhouse,circleci,CircleCI
+greenhouse,cloudflare,Cloudflare
+greenhouse,cockroachlabs,Cockroach Labs
+greenhouse,coinbase,Coinbase
+greenhouse,coursera,Coursera
+greenhouse,databricks,Databricks
+greenhouse,datadog,Datadog
+greenhouse,discord,Discord
+greenhouse,doordashusa,DoorDash
+greenhouse,dropbox,Dropbox
+greenhouse,duolingo,Duolingo
+greenhouse,elastic,Elastic
+greenhouse,epicgames,Epic Games
+greenhouse,everlane,Everlane
+greenhouse,faire,Faire
+greenhouse,figma,Figma
+greenhouse,flexport,Flexport
+greenhouse,gemini,Gemini
+greenhouse,gitlab,GitLab
+greenhouse,glossier,Glossier
+greenhouse,gusto,"Gusto, Inc."
+greenhouse,hellofresh,HelloFresh
+greenhouse,imc,IMC Trading
+greenhouse,instacart,Instacart
+greenhouse,intercom,Fin
+greenhouse,janestreet,Jane Street
+greenhouse,jumptrading,Jump Trading
+greenhouse,khanacademy,Khan Academy
+greenhouse,lattice,Lattice
+greenhouse,lucidsoftware,Lucid Software
+greenhouse,lyft,Lyft
+greenhouse,masterclass,MasterClass
+greenhouse,medium,Medium
+greenhouse,mercury,Mercury
+greenhouse,mongodb,MongoDB
+greenhouse,nuro,Nuro
+greenhouse,okta,Okta
+greenhouse,onemedical,One Medical
+greenhouse,oscar,Oscar Health
+greenhouse,peloton,Peloton
+greenhouse,pinterest,Pinterest
+greenhouse,point72,Point72
+greenhouse,qualtrics,Qualtrics
+greenhouse,reddit,Reddit
+greenhouse,relativity,Relativity Space
+greenhouse,robinhood,Robinhood
+greenhouse,roblox,Roblox
+greenhouse,rocketlab,Rocket Lab
+greenhouse,samsara,Samsara
+greenhouse,scaleai,Scale AI
+greenhouse,sofi,SoFi
+greenhouse,spacex,SpaceX
+greenhouse,sproutsocial,Sprout Social
+greenhouse,squarespace,Squarespace
+greenhouse,stitchfix,Stitch Fix
+greenhouse,stripe,Stripe
+greenhouse,sweetgreen,sweetgreen
+greenhouse,tanium,Tanium
+greenhouse,toast,Toast
+greenhouse,twilio,Twilio
+greenhouse,twitch,Twitch
+greenhouse,udemy,Udemy
+greenhouse,voxmedia,Vox Media
+greenhouse,waymo,Waymo
+greenhouse,zocdoc,Zocdoc
+greenhouse,zscaler,Zscaler
+lever,gopuff,Gopuff
+lever,outreach,Outreach
+lever,palantir,Palantir
+lever,ro,Ro
+lever,shieldai,Shield AI
+lever,spotify,Spotify
+lever,wealthfront,Wealthfront
+lever,zoox,Zoox

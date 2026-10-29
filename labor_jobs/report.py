@@ -41,7 +41,11 @@ def build_report(cov, occupations, states, sources, extras=None, top=15, min_pos
         *[f"- {s}" for s in sources],
         "",
         "## Coverage",
-        f"- Postings loaded: {n:,}",
+        f"- Postings loaded: {n:,}"
+        + (" (" + ", ".join(f"{s} {c:,}" for s, c in cov.get("by_source", {}).items()) + ")"
+           if len(cov.get("by_source", {})) > 1 else ""),
+        *([f"- Same job found in more than one source, counted once: {cov['merged_duplicates']:,}"]
+          if cov.get("merged_duplicates") else []),
         f"- With a US state: {cov['with_state']:,} ({pct(cov['with_state'], n)})",
         f"- With salary information: {cov['with_salary']:,} ({pct(cov['with_salary'], n)})",
         *([f"- Placed in a metro area: {cov['with_metro']:,} ({pct(cov['with_metro'], n)})"]
@@ -272,13 +276,15 @@ def h1b_section(detailed, fiscal_year, top, min_filings=50):
     rows = rows[rows["h1b_filings"] >= min_filings]
     cols = {"onet_title": "Occupation", "postings": "Postings", "h1b_filings": "H-1B filings",
             "h1b_median_wage": "H-1B median offer $", "h1b_wage_p25": "25th pct $",
-            "h1b_wage_p75": "75th pct $", "median_posted_salary": "Posted median $",
+            "h1b_wage_p75": "75th pct $", "perm_filings": "Green-card filings",
+            "perm_median_wage": "Green-card median offer $", "median_posted_salary": "Posted median $",
             "bls_median_wage": "BLS median $", "h1b_top_employers": "Top sponsoring employers"}
-    out = [f"## Offered salaries from H-1B filings (fiscal year {fiscal_year})",
-           "Employers sponsoring H-1B and similar visas must file the wage they will pay for "
-           "each job. These are real offers for specific roles, including specialized ones "
-           "BLS doesn't report wages for, but only for sponsored jobs: mostly tech, research, "
-           "finance and medicine, and at least the local prevailing wage.",
+    out = [f"## Offered salaries from visa filings (fiscal year {fiscal_year})",
+           "Employers sponsoring H-1B visas and PERM green cards must file the wage they will "
+           "pay for each job. These are real offers for specific roles, including specialized "
+           "ones BLS doesn't report wages for, but only for sponsored jobs: H-1B leans to tech, "
+           "research, finance and medicine; green cards cover a wider range, from teachers to "
+           "engineers. Both must be at least the local prevailing wage.",
            "",
            f"### Occupations in the postings with the most filings (at least {min_filings})",
            table(rows.sort_values("h1b_filings", ascending=False).head(top), cols),

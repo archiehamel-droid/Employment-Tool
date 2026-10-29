@@ -71,14 +71,17 @@ def _fallback_ids(df):
 
 
 def load_postings(path, descriptions=False):
-    df = pd.read_csv(path, dtype={"job_id": str, "zip_code": str, "fips": str},
-                     low_memory=False)
+    # All text: a column that is entirely blank would otherwise be read as
+    # numbers. Numeric fields are converted where they are used.
+    df = pd.read_csv(path, dtype=str, low_memory=False)
     missing = {"title", "location"} - set(df.columns)
     if missing:
         raise ValueError(f"{path} is missing required columns: {sorted(missing)}")
 
     out = pd.DataFrame(index=df.index)
     out["job_id"] = df["job_id"] if "job_id" in df else _fallback_ids(df)
+    inferred = source_of(out["job_id"])
+    out["source"] = df["source"].fillna(inferred) if "source" in df else inferred
     out["title"] = df["title"]
     out["company_name"] = df.get("company_name")
     out["location"] = df["location"]
@@ -111,7 +114,48 @@ def load_postings(path, descriptions=False):
     return out
 
 
+FEED_PREFIXES = ("adzuna", "usajobs", "greenhouse", "lever", "ashby")
+# When the same job is in several sources, keep the most direct one.
+SOURCE_PRIORITY = {"greenhouse": 0, "lever": 0, "ashby": 0, "usajobs": 1, "adzuna": 2, "linkedin": 3}
+COMPANY_SUFFIXES = re.compile(r"\b(inc|llc|l\.l\.c|corp|corporation|co|company|ltd|limited|plc|lp|"
+                              r"holdings|group|the|usa|us)\b")
+
+
+def source_of(job_ids):
+    """Feed name from fetcher job IDs ("adzuna-123"); Kaggle IDs are LinkedIn's."""
+    prefix = job_ids.astype(str).str.split("-").str[0]
+    return prefix.where(prefix.isin(FEED_PREFIXES), "linkedin")
+
+
+def _norm(text):
+    text = re.sub(r"[^a-z0-9 ]+", " ", str(text).lower()) if isinstance(text, str) else ""
+    return " ".join(text.split())
+
+
+def merge_duplicates(postings):
+    """Drop a posting when a more direct source has a posting with the same
+    title, company, state and city; the kept one lists the others in
+    also_listed_on. Postings that match within one source are all kept: a
+    company can have several identical openings."""
+    city = postings["location"].fillna("").str.split(",").str[0]
+    key = (postings["title"].map(_norm) + "|" + postings["company_name"].map(
+        lambda c: " ".join(COMPANY_SUFFIXES.sub(" ", _norm(c)).split())) + "|"
+        + postings["state"].fillna("") + "|" + city.map(_norm))
+    rank = postings["source"].map(SOURCE_PRIORITY).fillna(9)
+    best = rank.groupby(key).transform("min")
+    keep = rank == best
+    others = (pd.DataFrame({"key": key, "source": postings["source"]})[~keep]
+              .drop_duplicates().groupby("key")["source"].agg(lambda s: ", ".join(sorted(s))))
+    out = postings[keep].copy()
+    out["also_listed_on"] = key[keep].map(others)
+    return out.reset_index(drop=True), int((~keep).sum())
+
+
 def load_all(paths, descriptions=False):
-    """Load one or more postings files, keeping the first copy of each job_id."""
+    """Load one or more postings files, keeping the first copy of each
+    job_id and merging the same job found in different sources."""
     frames = [load_postings(p, descriptions) for p in paths]
-    return pd.concat(frames, ignore_index=True).drop_duplicates("job_id").reset_index(drop=True)
+    df = pd.concat(frames, ignore_index=True).drop_duplicates("job_id").reset_index(drop=True)
+    df, merged = merge_duplicates(df)
+    df.attrs["merged_duplicates"] = merged
+    return df

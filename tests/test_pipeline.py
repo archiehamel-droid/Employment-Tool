@@ -160,7 +160,7 @@ def test_end_to_end(files):
                   "--cache", str(files["out"] / "cache"),
                   "--history", str(files["out"] / "history.sqlite"),
                   "--projections-file", str(files["projections"]),
-                  "--skip-jolts", "--skip-h1b", "--skip-metros"])
+                  "--skip-jolts", "--skip-h1b", "--skip-metros", "--skip-perm"])
     assert post.call_count == 3  # 51 series in batches of 25
     payload = post.call_args.kwargs["json"]
     assert (payload["startyear"], payload["endyear"]) == ("2024", "2024")
@@ -688,3 +688,141 @@ def test_resume_and_major_matching(tmp_path):
                                  metro_names={"12420": "Austin-Round Rock, TX"})
     assert austin["job_id"].tolist() == ["1"]
     assert match.rank_postings(postings, occ.reset_index(), profile, 5, min_salary=100000)["job_id"].tolist() == ["2", "3"]
+
+
+def test_pay_and_us_location_parsing():
+    from labor_jobs.feeds import parse_pay, us_location
+    assert parse_pay("The range is $120,000 - $150,000 per year") == (120000, 150000, "YEARLY")
+    assert parse_pay("$150,000.00 - $210,000.00") == (150000, 210000, "YEARLY")
+    assert parse_pay("$120-150K base") == (120000, 150000, "YEARLY")
+    assert parse_pay("Pay: $45.00 - $55.00 per hour") == (45, 55, "HOURLY")
+    for text in ("We raised $100M", "a $1.2 billion valuation", "$100 sign-on bonus",
+                 "$75/month phone stipend", "no pay listed", None):
+        assert parse_pay(text) == (None, None, None), text
+    assert us_location("San Francisco, CA") == ("San Francisco, CA", "CA")
+    assert us_location("Seattle, Washington") == ("Seattle, WA", "WA")
+    assert us_location("Washington, D.C.") == ("Washington, DC", "DC")
+    assert us_location("New York, NY; London, UK") == ("New York, NY", "NY")
+    assert us_location("Remote - US") == ("Remote, US", None)
+    assert us_location("Remote") == ("Remote", None)
+    assert us_location("London, UK") is None and us_location("Remote (Canada)") is None
+
+
+def test_merging_the_same_job_across_sources():
+    from labor_jobs.linkedin import merge_duplicates, source_of
+    assert source_of(pd.Series(["adzuna-1", "greenhouse-stripe-9", "3901234"])).tolist() == \
+        ["adzuna", "greenhouse", "linkedin"]
+    postings = pd.DataFrame({
+        "job_id": ["greenhouse-acme-1", "adzuna-7", "adzuna-8", "adzuna-9", "adzuna-10", "usajobs-5"],
+        "source": ["greenhouse", "adzuna", "adzuna", "adzuna", "adzuna", "usajobs"],
+        "title": ["Data Engineer", "Data Engineer ", "Data Engineer", "Nurse", "Nurse", "Nurse"],
+        "company_name": ["Acme", "ACME, Inc.", "Acme", "VA", "VA", "VA"],
+        "state": ["TX", "TX", "CA", "DC", "DC", "DC"],
+        "location": ["Austin, TX", "Austin, TX", "San Jose, CA", "Washington, DC", "Washington, DC",
+                     "Washington, DC"]})
+    kept, merged = merge_duplicates(postings)
+    # The Adzuna copy of Acme's Austin job and the two Adzuna copies of the VA job go;
+    # Acme's San Jose job is a different job.
+    assert merged == 3
+    assert kept["job_id"].tolist() == ["greenhouse-acme-1", "adzuna-8", "usajobs-5"]
+    assert kept.loc[kept.job_id == "greenhouse-acme-1", "also_listed_on"].iat[0] == "adzuna"
+    # Identical postings within one source are separate openings and are kept.
+    same = pd.concat([postings.iloc[[3]]] * 2, ignore_index=True).assign(job_id=["adzuna-1", "adzuna-2"])
+    assert merge_duplicates(same)[1] == 0
+
+
+def test_usajobs_rows():
+    from labor_jobs import usajobs
+    item = {"usajobsControlNumber": 759375300, "hiringAgencyName": "Veterans Health Administration",
+            "positionTitle": "Registered Nurse ", "positionOpenDate": "2026-10-01", "salaryType": "Per Year",
+            "minimumSalary": 75332.0, "maximumSalary": 133142.0, "workSchedule": "Full-time",
+            "jobcategories": [{"series": "0610"}],
+            "positionlocations": [{"positionLocationCity": "Austin", "positionLocationState": "Texas",
+                                   "positionLocationCountry": "United States"},
+                                  {"positionLocationCity": "Waco", "positionLocationState": "Texas",
+                                   "positionLocationCountry": "United States"}]}
+    row, in_us = usajobs.to_row(item, "2026-10-29")
+    assert in_us and row["location"] == "Austin, TX" and row["title"] == "Registered Nurse"
+    assert (row["min_salary"], row["max_salary"], row["pay_period"]) == (75332.0, 133142.0, "YEARLY")
+    assert row["work_type"] == "Full-time; 2 location(s)" and row["category"] == "OPM series 0610"
+    abroad = {**item, "positionlocations": [{"positionLocationCity": "Seoul",
+                                              "positionLocationCountry": "Korea, South"}]}
+    assert usajobs.to_row(abroad, "2026-10-29")[1] is False
+
+
+def test_job_board_parsers():
+    from labor_jobs import ats
+    gh = {"jobs": [{"id": 1, "title": "Data Engineer", "location": {"name": "Austin, TX"},
+                    "updated_at": "2026-10-20T10:00:00Z", "absolute_url": "https://x/1",
+                    "content": "&lt;p&gt;Python and SQL. Pay: $140,000 - $170,000 per year&lt;/p&gt;"},
+                   {"id": 2, "title": "Engineer", "location": {"name": "London, UK"}, "content": ""}]}
+    rows = [r for r in ats.greenhouse("acme", gh, "Acme") if r]
+    assert len(rows) == 1  # the London job is dropped
+    assert rows[0]["job_id"] == "greenhouse-acme-1" and rows[0]["company_name"] == "Acme"
+    assert (rows[0]["min_salary"], rows[0]["max_salary"]) == (140000, 170000)
+    assert "Python and SQL" in rows[0]["description"]
+
+    lv = [{"id": "a", "text": "Nurse", "categories": {"location": "Denver, CO", "commitment": "Full-time"},
+           "createdAt": 1790000000000, "hostedUrl": "https://x/a", "descriptionPlain": "Care",
+           "salaryRange": {"min": 90000, "max": 110000, "currency": "USD", "interval": "per-year-salary"}}]
+    row = next(r for r in ats.lever("acme", lv) if r)
+    assert (row["min_salary"], row["pay_period"], row["location"]) == (90000, "YEARLY", "Denver, CO")
+
+    ab = {"jobs": [{"id": "z", "title": "ML Engineer", "isRemote": True, "location": "United States",
+                    "publishedAt": "2026-10-01", "jobUrl": "https://x/z", "descriptionPlain": "PyTorch",
+                    "compensation": {"summaryComponents": [{"compensationType": "Salary", "interval": "1 YEAR",
+                                                            "currencyCode": "USD", "minValue": 200000,
+                                                            "maxValue": 260000}]}}]}
+    row = next(r for r in ats.ashby("acme", ab) if r)
+    assert row["location"] == "Remote, US" and (row["min_salary"], row["max_salary"]) == (200000, 260000)
+
+
+def test_perm_wages(tmp_path):
+    from labor_jobs import perm
+    old = pd.DataFrame({"CASE_NUMBER": ["A-1", "A-2", "A-3"], "CASE_STATUS": ["Certified", "Denied", "Certified-Expired"],
+                        "DECISION_DATE": ["2024-01-05"] * 3, "EMPLOYER_NAME": ["Acme"] * 3,
+                        "JOB_TITLE": ["Software Engineer"] * 3, "PW_SOC_CODE": ["15-1252", "15-1252", "15-1252.00"],
+                        "WAGE_OFFER_FROM": ["150,000", "1", "70"], "WAGE_OFFER_UNIT_OF_PAY": ["Year", "Year", "Hour"],
+                        "WORKSITE_CITY": ["AUSTIN"] * 3, "WORKSITE_STATE": ["TEXAS"] * 3})
+    new = pd.DataFrame({"CASE_NUMBER": ["G-1"], "CASE_STATUS": ["Certified"], "DECISION_DATE": ["2024-02-01"],
+                        "EMP_BUSINESS_NAME": ["Beta"], "JOB_TITLE": ["Accountant"], "JOB_OPP_WAGE_FROM": ["80000"],
+                        "JOB_OPP_WAGE_PER": ["Year"], "PRIMARY_WORKSITE_CITY": ["Boston"],
+                        "PRIMARY_WORKSITE_STATE": ["MA"]})
+    old.to_csv(tmp_path / "old.csv", index=False)
+    new.to_csv(tmp_path / "new.csv", index=False)
+    d = perm.read_perm([tmp_path / "old.csv", tmp_path / "new.csv"]).set_index("case_number")
+    assert list(d.index) == ["A-1", "A-3", "G-1"]  # the denied filing is dropped
+    assert d.loc["A-1", "onet_code"] == "15-1252.00" and d.loc["A-1", "state"] == "TX"
+    assert d.loc["A-3", "annual_wage"] == 70 * 2080
+    assert pd.isna(d.loc["G-1", "onet_code"]) and d.loc["G-1", "state"] == "MA"  # matched by title later
+
+
+def test_history_records_each_postings_source(tmp_path):
+    from labor_jobs import history
+    db = tmp_path / "h.sqlite"
+    postings = pd.DataFrame({"job_id": ["a1", "u1", "u2"], "soc_code": ["15-1252", "29-1141", "29-1141"],
+                             "state": ["TX"] * 3, "source": ["adzuna", "usajobs", "usajobs"]})
+    history.record(postings, pd.Series("2026-10", index=postings.index), db, "x", postings["source"])
+    assert history.monthly_counts(db, "usajobs")["postings"].sum() == 2
+    assert history.monthly_counts(db, ["adzuna", "usajobs"])["postings"].sum() == 3
+
+
+def test_appending_to_a_file_in_an_older_layout(tmp_path):
+    import csv
+    from labor_jobs.feeds import FIELDS, write_rows
+    from labor_jobs.linkedin import load_postings
+    old = tmp_path / "old.csv"
+    with old.open("w", newline="") as f:  # no "source" column, as written before it existed
+        f.write("job_id,title,location,min_salary\nadzuna-1,Nurse,\"Austin, TX\",90000\n")
+    added = write_rows([{"job_id": "adzuna-1", "title": "dup"},
+                        {"job_id": "adzuna-2", "source": "adzuna", "title": "Welder", "location": "Waco, TX"}],
+                       old, append=True)
+    assert added == 1
+    with old.open(newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    assert reader.fieldnames == FIELDS
+    assert [(r["job_id"], r["title"], r["location"]) for r in rows] == \
+        [("adzuna-1", "Nurse", "Austin, TX"), ("adzuna-2", "Welder", "Waco, TX")]
+    loaded = load_postings(old)
+    assert loaded["source"].tolist() == ["adzuna", "adzuna"]  # blank source worked out from the ID

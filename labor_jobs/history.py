@@ -46,12 +46,15 @@ def detect_feed(postings):
 
 
 def record(postings, months, db_path, source, feed):
-    """Add postings with a known month; returns how many were new."""
+    """Add postings with a known month; returns how many were new. feed is
+    a name or a Series of names (one per posting)."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     rows = (postings.assign(month=months).dropna(subset=["month"])
             [["job_id", "month", "soc_code", "state"]])
     rows = rows.astype(object).where(rows.notna(), None)
+    feeds = (feed.reindex(rows.index) if isinstance(feed, pd.Series)
+             else pd.Series(feed, index=rows.index)).tolist()
     with _connect(db_path) as con:
         before = con.execute("SELECT COUNT(*) FROM postings").fetchone()[0]
         # Re-running with better title matching updates the occupation.
@@ -59,14 +62,17 @@ def record(postings, months, db_path, source, feed):
             "INSERT INTO postings (job_id, month, soc_code, state, source, feed) "
             "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE "
             "SET soc_code = excluded.soc_code, state = excluded.state, month = excluded.month",
-            [(*r, str(source), feed) for r in rows.itertuples(index=False)])
+            [(*r, str(source), f) for r, f in zip(rows.itertuples(index=False), feeds)])
         after = con.execute("SELECT COUNT(*) FROM postings").fetchone()[0]
     return after - before
 
 
 def monthly_counts(db_path, feed=None):
+    """Postings per month and occupation, for one feed or a list of feeds."""
+    feeds = [feed] if isinstance(feed, str) else list(feed or [])
     with _connect(db_path) as con:
-        where, params = ("WHERE feed = ?", (feed,)) if feed else ("", ())
+        where = f"WHERE feed IN ({', '.join('?' * len(feeds))})" if feeds else ""
+        params = tuple(feeds)
         return pd.read_sql_query(
             f"SELECT month, soc_code, COUNT(*) AS postings FROM postings {where} "
             "GROUP BY month, soc_code", con, params=params)

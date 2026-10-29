@@ -16,6 +16,9 @@ people actually work, and what postings pay against what BLS says the job pays.
 | [BLS OEWS metro areas](https://www.bls.gov/oes/tables.htm) (May 2024) | Employment and wages by occupation for ~390 metropolitan areas | `oesm24ma.zip` downloaded automatically |
 | [Census metro delineations](https://www.census.gov/geographies/reference-files/time-series/demo/metro-micro/delineation-files.html) (2023) | Which counties and principal cities make up each metro area | Downloaded automatically |
 | [Adzuna API](https://developer.adzuna.com/) | Current US job postings with advertised salaries | Separate fetch command (needs a free key), see below |
+| [USAJOBS](https://developer.usajobs.gov/) | Every federal job announcement, with its pay range (~20,000 a month) | `python -m labor_jobs.usajobs` (no key needed) |
+| Company job boards on [Greenhouse](https://developers.greenhouse.io/job-board.html), [Lever](https://github.com/lever/postings-api) and [Ashby](https://developers.ashbyhq.com/) | Postings straight from employers, with full descriptions and usually pay ranges | `python -m labor_jobs.ats` (no key needed) |
+| [DOL PERM disclosure data](https://www.dol.gov/agencies/eta/foreign-labor/performance) (fiscal year 2024) | Offered wages for ~100,000 employer-sponsored green-card jobs | Downloaded automatically |
 | [Kaggle LinkedIn Job Postings](https://www.kaggle.com/datasets/arshkon/linkedin-job-postings) | ~124k US postings from 2023–24: title, company, location, salary | You download it once (see below) |
 | [O*NET](https://www.onetcenter.org/database.html) | ~55k job titles, each mapped to an occupation code | Downloaded automatically |
 
@@ -104,6 +107,45 @@ matches and about 85% of specialized matches to be the right occupation.
   metro is compared with BLS employment and wages in `metros.csv`, and each metro and
   occupation pair in `metro_occupations.csv`.
 
+### Combining postings sources
+
+Pass several postings files together; each posting keeps its `source`:
+
+```bash
+python -m labor_jobs.usajobs --days 31 --out data/usajobs/2026-10.csv
+python -m labor_jobs.ats --out data/ats/2026-10.csv
+python -m labor_jobs --postings data/adzuna/2026-10.csv data/usajobs/2026-10.csv data/ats/2026-10.csv
+```
+
+The same job often appears in several places: on a company's board, then copied to Adzuna.
+When postings in different sources share a title, company (ignoring "Inc.", "LLC" and so on),
+state and city, only the copy from the most direct source is kept: company boards, then
+USAJOBS, then Adzuna, then LinkedIn. The kept posting lists the others in `also_listed_on`,
+and the report gives the number merged. Matching postings within one source are all kept,
+since a company can have several identical openings.
+
+The postings history records each posting under its own source. Trends compare months of
+the same set of sources, so keep fetching the same sources each month.
+
+**USAJOBS** (`labor_jobs.usajobs`) uses the historic announcements API, which needs no key
+and lists every announcement opened in the last `--days` days with its pay range, agency,
+locations and federal job series. Nearly every posting states pay. It has no descriptions,
+so technology counts don't apply. An announcement listing many locations is saved once, at
+its first US location.
+
+**Company job boards** (`labor_jobs.ats`) reads the public job-board APIs of Greenhouse,
+Lever and Ashby for the companies in `labor_jobs/ats_companies.csv` (113 boards to start,
+including SpaceX, OpenAI, Databricks, Stripe and Palantir). Add a company with its platform,
+board name (from its board address, e.g. `stripe` in `boards.greenhouse.io/stripe`) and
+display name. Only US and unspecified-remote postings are kept. Pay comes from the board's
+pay fields, or from a pay range in the description; amounts like "$100M raised" or a
+"$75/month stipend" are ignored. These postings have full descriptions, so they work best
+for technology counts and resume matching. They lean towards tech and growth companies.
+
+**PERM green-card wages** are summarized next to H-1B wages (`perm_*` columns). The fiscal
+2024 data comes in two files because the application form changed in 2023. New-form filings
+have no occupation code, so they are matched by job title like postings are.
+
 ### Fresh postings from Adzuna
 
 Register for a free key at https://developer.adzuna.com/, then fetch recent postings and
@@ -125,7 +167,9 @@ python -m labor_jobs.adzuna --pages 200 --out data/adzuna/2026-10.csv
 python -m labor_jobs --postings data/adzuna/2026-10.csv
 ```
 
-Each page is one API call of up to 50 postings. By default the pages are a sample. They are
+`--append` adds to an existing month's file, skipping postings already in it. That lets a
+month's fetch be spread over several days within Adzuna's daily request limit, using a
+different `--seed` each time. Each page is one API call of up to 50 postings. By default the pages are a sample. They are
 split across Adzuna's 30 job categories in proportion to how many postings each has, then
 across states in proportion to their BLS employment, at random positions in each search's
 results. Adzuna serves at most 99 pages per search, so a date-sorted search only reaches the
@@ -237,6 +281,7 @@ Useful options (`python -m labor_jobs --help` lists them all):
   Without a key, BLS allows 25 requests a day per IP address. On shared cloud networks that
   limit is often already used up.
 - `--skip-unemployment`, `--skip-jolts` and `--skip-projections` leave those parts out.
+- `--perm-year 2025` or `--perm-files` pick other PERM data, and `--skip-perm` leaves it out.
 - `--h1b-year 2025` uses a different fiscal year of H-1B filings. `--h1b-files` uses local
   copies, and `--skip-h1b` leaves them out.
 - `--skip-metros` leaves out the metro-area comparison. `--oews-metro-file` uses a local copy.

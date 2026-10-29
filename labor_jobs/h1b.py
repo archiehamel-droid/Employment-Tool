@@ -45,9 +45,11 @@ def h1b_files(cache_dir, fiscal_year, user_agent, quarters=(1, 2, 3, 4)):
     return paths
 
 
-def _slim(path):
+def _slim(path, columns=None):
     """Copy of the needed columns, cached beside the spreadsheet: reading
-    the full 97-column file takes minutes."""
+    the full 97-column file takes minutes. The first column must be one
+    every data row has (the case number)."""
+    columns = columns or COLUMNS
     path = Path(path)
     slim = path.with_suffix(".slim.csv.gz")
     if slim.exists() and slim.stat().st_mtime >= path.stat().st_mtime:
@@ -58,12 +60,12 @@ def _slim(path):
     wb = openpyxl.load_workbook(path, read_only=True)
     rows = wb[wb.sheetnames[0]].iter_rows(values_only=True)
     header = [str(h).strip().upper() if h else "" for h in next(rows)]
-    missing = set(COLUMNS) - set(header)
+    missing = set(columns) - set(header)
     if missing:
         raise ValueError(f"{path.name} is missing columns {sorted(missing)}")
-    idx = [header.index(c) for c in COLUMNS]
+    idx = [header.index(c) for c in columns]
     # The sheet has blank rows after the data.
-    df = pd.DataFrame(([r[i] for i in idx] for r in rows if r[idx[0]]), columns=COLUMNS)
+    df = pd.DataFrame(([r[i] for i in idx] for r in rows if r[idx[0]]), columns=columns)
     wb.close()
     df.to_csv(slim, index=False, compression="gzip")
     return slim
@@ -104,21 +106,22 @@ def read_h1b(paths):
     return out.reset_index(drop=True)
 
 
-def summarize(h1b, keys):
+def summarize(h1b, keys, prefix="h1b"):
     """Offered wages per group: filings, median and middle-50% range, share
-    at the senior (Level IV) prevailing-wage level, and top employers."""
+    at the senior (Level IV) prevailing-wage level, and top employers.
+    Columns are named {prefix}_filings and so on."""
     g = h1b.groupby(keys)
-    df = g.agg(h1b_filings=("case_number", "size"),
-               h1b_median_wage=("annual_wage", "median"),
-               h1b_wage_p25=("annual_wage", lambda s: s.quantile(0.25)),
-               h1b_wage_p75=("annual_wage", lambda s: s.quantile(0.75)),
-               h1b_level_iv_pct=("wage_level", lambda s: (s == "IV").mean() * 100))
-    df["h1b_top_employers"] = g["employer"].agg(
+    df = g.agg(filings=("case_number", "size"),
+               median_wage=("annual_wage", "median"),
+               wage_p25=("annual_wage", lambda s: s.quantile(0.25)),
+               wage_p75=("annual_wage", lambda s: s.quantile(0.75)))
+    if "wage_level" in h1b:
+        df["level_iv_pct"] = g["wage_level"].agg(lambda s: (s == "IV").mean() * 100).round(1)
+    df["top_employers"] = g["employer"].agg(
         lambda s: ", ".join(s.value_counts().head(3).index.str.title()))
-    for col in ("h1b_median_wage", "h1b_wage_p25", "h1b_wage_p75"):
+    for col in ("median_wage", "wage_p25", "wage_p75"):
         df[col] = df[col].round()
-    df["h1b_level_iv_pct"] = df["h1b_level_iv_pct"].round(1)
-    return df.reset_index()
+    return df.add_prefix(f"{prefix}_").reset_index()
 
 
 def reference_titles(h1b, min_employers=3, min_share=0.6):

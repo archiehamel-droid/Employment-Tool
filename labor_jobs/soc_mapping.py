@@ -74,6 +74,7 @@ MODIFIER_WORDS = {
     "associate", "assistant", "deputy", "graduate", "travel", "traveling",
     "field", "certified", "licensed", "general", "clinical", "corporate",
     "night", "weekend", "bilingual", "chief", "head",
+    "supervisory",  # federal titles: "Supervisory Accountant"
 }
 MAX_DROPPED_WORDS = 2
 # (pattern on the lowercased raw title, O*NET code).

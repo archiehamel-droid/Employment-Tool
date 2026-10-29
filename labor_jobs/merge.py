@@ -98,7 +98,7 @@ def state_unemployment(postings, monthly):
     """Unemployment rate per state for the months the postings were listed:
     the average of the monthly rates, weighted by that state's postings per
     month. Falls back to the latest month when postings have no dates."""
-    months = posting_months(postings)
+    months = history_months(postings)
     # Months BLS hasn't published yet use the latest published month.
     available = sorted(monthly["month"].unique())
     if available:

@@ -110,7 +110,9 @@ def main(argv=None):
     unemployment = None
     if not args.skip_unemployment:
         print("Fetching state unemployment rates from the BLS API...")
-        months = merge.posting_months(postings).dropna()
+        # Snapshot feeds count as the month they were fetched (as in the
+        # history); company boards can carry creation dates years back.
+        months = merge.history_months(postings).dropna()
         years = {}
         if len(months):
             years = {"start_year": int(months.min()[:4]), "end_year": int(months.max()[:4])}
@@ -179,6 +181,7 @@ def main(argv=None):
     state_occ = merge.by_state_occupation(postings, oews_state, args.min_salary_samples)
     states = merge.by_state(postings, oews_state, unemployment)
     cov = merge.coverage(postings, oews_national)
+    cov["merged_duplicates"] = merged
     extras = {}
 
     if not args.skip_projections:

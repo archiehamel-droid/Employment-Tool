@@ -17,7 +17,6 @@ prevailing wage. Only job, employer, worksite and wage columns are read; the
 file's contact names, emails and phone numbers are never loaded.
 """
 
-import re
 from pathlib import Path
 
 import pandas as pd

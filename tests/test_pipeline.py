@@ -589,3 +589,102 @@ def test_zero_salary_ends_bls_combined_codes_and_unpublished_months():
     # October isn't published yet, so October postings use September.
     assert got.loc["TX", "unemployment_rate"] == 4.1
     assert got.loc["CA", "unemployment_period"] == "2026-09"
+
+
+def write_cip_fixtures(tmp_path):
+    cip = pd.DataFrame({
+        "CIPFamily": ['="11"'] * 3 + ['="27"', '="36"'],
+        "CIPCode": ['="11.0701"', '="11.0802"', '="11.0101"', '="27.0501"', '="36.0115"'],
+        "CIPTitle": ["Computer Science.", "Data Modeling/Warehousing and Database Administration.",
+                     "Computer and Information Sciences, General.", "Statistics, General.", "Music."],
+        "Examples": ["", "", "", "Examples: - Applied Statistics", ""]})
+    cip_csv = tmp_path / "cip.csv"
+    cip.to_csv(cip_csv, index=False)
+    xw = pd.DataFrame({
+        "CIP2020Code": ["11.0701", "11.0701", "11.0701", "27.0501", "27.0501", "36.0115"],
+        "CIP2020Title": ["Computer Science."] * 3 + ["Statistics, General."] * 2 + ["Music."],
+        "SOC2018Code": ["15-1252", "15-2051", "25-1021", "15-2041", "15-2051", "27-2042"],
+        "SOC2018Title": ["Software Developers", "Data Scientists", "Computer Science Teachers",
+                         "Statisticians", "Data Scientists", "Musicians"]})
+    crosswalk = tmp_path / "xw.xlsx"
+    with pd.ExcelWriter(crosswalk) as xl:
+        pd.DataFrame({"File Name": ["CIP-SOC"]}).to_excel(xl, sheet_name="File Guide", index=False)
+        xw.to_excel(xl, sheet_name="CIP-SOC", index=False)
+    return cip_csv, crosswalk
+
+
+def test_major_matching_and_resume_education(tmp_path):
+    from labor_jobs import majors
+    m = majors.MajorMatcher(*write_cip_fixtures(tmp_path))
+    assert m.match("CS")[0][0] == "11.0701"
+    assert m.match("B.S. in Computer Science")[0][0] == "11.0701"
+    assert m.match("Applied Statistics")[0][0] == "27.0501"  # from the program's examples
+    assert m.match("Music") == []  # leisure-course family 36 isn't a major
+    # Postsecondary teaching (25-1xxx) is left out.
+    assert m.occupations_for(["11.0701"]) == ["15-1252", "15-2051"]
+
+    text = ("Austin, TX | MS Office, Excel\nB.S. in Statistics, 2022\n"
+            "Master of Science in Data Science from Rice University")
+    assert majors.majors_in_text(text) == ["Statistics", "Data Science"]
+    assert majors.education_level(text) == (4, "Master's degree")
+    # "MS Office" and "TX"/"MA" abbreviations aren't degrees.
+    assert majors.education_level("Skills: MS Office\nBoston, MA") == (0, "No degree found")
+
+
+def test_resume_and_major_matching(tmp_path):
+    import docx
+    from labor_jobs import match, majors
+    resume = tmp_path / "resume.docx"
+    doc = docx.Document()
+    for line in ["Taylor Example (fictional)", "Austin, TX | taylor@example.com | (555) 010-0000",
+                 "Data Analyst | Acme Co. | 2022 - Present",
+                 "Built dashboards with Python and SQL", "B.S. in Statistics, 2022",
+                 "Skills: Python, SQL, Tableau, Excel, Git"]:
+        doc.add_paragraph(line)
+    doc.save(resume)
+    text = match.read_document(resume)
+    assert "Data Analyst | Acme Co." in text
+
+    ref = pd.DataFrame({"title": ["Data Scientists", "Data Analyst", "Software Developers", "Tableau Developer"],
+                        "onet_code": ["15-2051.00", "15-2051.00", "15-1252.00", "15-1252.00"]})
+    matcher = TitleMatcher(ref)
+    tech = pd.DataFrame({"example": ["Python", "Structured query language SQL", "Tableau", "Microsoft Excel",
+                                     "Git", "Kubernetes"], "hot": [True] * 6})
+    major_matcher = majors.MajorMatcher(*write_cip_fixtures(tmp_path))
+    profile = match.resume_profile(text, matcher, tech, major_matcher)
+    assert profile["titles"] == {"15-2051.00": "Data Analyst"}  # "Tableau" in the skills line isn't a title
+    assert profile["technologies"] == ["Excel", "Git", "Python", "SQL", "Tableau"]
+    assert profile["majors"] == ["Statistics"] and profile["education_level"] == 3
+
+    detailed = pd.DataFrame({
+        "onet_code": ["15-2051.00", "15-1252.00", "15-2041.00", "29-1141.00"],
+        "soc_code": ["15-2051", "15-1252", "15-2041", "29-1141"],
+        "onet_title": ["Data Scientists", "Software Developers", "Statisticians", "Registered Nurses"],
+        "postings": [5, 9, 1, 20],
+        "posting_technologies": ["Python 60%, SQL 50%, Spark 20%", "Python 40%, Kubernetes 30%", None, None],
+        "onet_hot_technologies": [None, None, "R, SAS, Python", "Microsoft Office"],
+        "typical_education": ["Bachelor's degree", "Bachelor's degree", "Master's degree", "Bachelor's degree"]})
+    major_socs = set(major_matcher.occupations_for(["27.0501"]))
+    occ = match.score_occupations(detailed, profile, major_socs).set_index("onet_code")
+    assert occ.index[0] == "15-2051.00"  # held title + major + skills
+    # Title 1, major 1, skills 2 of 5 resume technologies: (3 + 2 + 2 * 0.4) / 7.
+    assert occ.loc["15-2051.00", "fit_score"] == round((3 + 2 + 2 * 0.4) / 7, 3)
+    assert "Spark" in occ.loc["15-2051.00", "skills_to_add"]
+    # Statisticians fit the major but usually need a master's: counted half.
+    assert "usually needs: Master's degree" in occ.loc["15-2041.00", "why"]
+    assert "29-1141.00" not in occ.index  # nothing in common
+
+    postings = pd.DataFrame({
+        "job_id": ["1", "2", "3", "4"], "title": ["Data Analyst", "Data Scientist", "Backend Engineer", "Nurse"],
+        "onet_code": ["15-2051.00", "15-2051.00", "15-1252.00", "29-1141.00"],
+        "state": ["TX", "CA", "TX", "TX"], "annual_salary": [90000, 150000, 120000, 80000],
+        "technologies": ["Python; SQL", "Spark", "Kubernetes", ""], "metro": ["12420", None, None, None]})
+    ranked = match.rank_postings(postings, occ.reset_index(), profile, top_occupations=5)
+    assert ranked["job_id"].tolist()[:2] == ["1", "2"]  # same occupation; posting 1 lists their skills
+    assert ranked.loc[ranked.job_id == "1", "matched_skills"].iat[0] == "Python, SQL"
+    texas = match.rank_postings(postings, occ.reset_index(), profile, 5, states=["tx"])
+    assert set(texas["state"]) == {"TX"}
+    austin = match.rank_postings(postings, occ.reset_index(), profile, 5, metro="austin",
+                                 metro_names={"12420": "Austin-Round Rock, TX"})
+    assert austin["job_id"].tolist() == ["1"]
+    assert match.rank_postings(postings, occ.reset_index(), profile, 5, min_salary=100000)["job_id"].tolist() == ["2", "3"]

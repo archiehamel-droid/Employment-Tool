@@ -6,11 +6,11 @@ import os
 from datetime import date
 from pathlib import Path
 
-import pandas as pd
 
 from . import bls, h1b, history, jolts, merge, metros, projections, report, skills
+from .matching import build_matcher
 from .linkedin import load_all
-from .soc_mapping import TitleMatcher, is_gig, load_onet_titles, load_title_overrides
+from .soc_mapping import is_gig, load_onet_titles, load_title_overrides
 
 
 def parse_args(argv=None):
@@ -124,17 +124,7 @@ def main(argv=None):
     sources.append(f"O*NET {version} occupation, alternate and reported titles")
     if profiles is not None:
         sources.append(f"O*NET {version} Job Zones, Skills and Technology Skills")
-    oews_titles = oews_national.loc[oews_national["o_group"] == "detailed", ["occ_title", "soc_code"]]
-    reference = pd.concat([
-        pd.DataFrame({"title": oews_titles["occ_title"], "onet_code": oews_titles["soc_code"]}),
-        onet])
     overrides = load_title_overrides(*([args.title_map] if args.title_map else []))
-    employment = dict(zip(oews_national["soc_code"], oews_national["tot_emp"]))
-    tech_names = None
-    if technologies is not None:
-        tech_names = skills.title_technologies(
-            technologies, pd.concat([profiles["onet_title"], oews_titles["occ_title"]]))
-    names = dict(zip(profiles["onet_code"], profiles["onet_title"])) if profiles is not None else None
 
     filings, employer_titles = None, None
     if not args.skip_h1b:
@@ -146,8 +136,8 @@ def main(argv=None):
         sources.append(f"DOL H-1B/LCA disclosure data, fiscal year {args.h1b_year} "
                        f"({len(filings):,} certified full-time filings)")
 
-    matcher = TitleMatcher(reference, overrides, args.fuzzy_cutoff, employment, tech_names, names,
-                           employer_titles)
+    matcher = build_matcher(oews_national, onet, profiles, technologies, overrides,
+                            args.fuzzy_cutoff, employer_titles)
     postings = postings.join(matcher.map_titles(postings["title"]))
     gig = [is_gig(t, c) for t, c in zip(postings["title"], postings["company_name"])]
     postings.loc[gig, ["onet_code", "soc_code"]] = None

@@ -16,11 +16,13 @@ def _fmt(value):
         return f"{value:.2f}" if abs(value) >= 1 else f"{value:.3g}"
     if isinstance(value, int):
         return f"{value:,}"
-    return "" if value is None else str(value)
+    return "" if value is None else str(value).replace("|", "/").replace("\n", " ")
 
 
 def table(df, columns):
-    """Render selected columns of df as a Markdown table. columns: {col: header}."""
+    """Render selected columns of df as a Markdown table. columns: {col: header};
+    columns df doesn't have are left out."""
+    columns = {c: h for c, h in columns.items() if c in df}
     lines = ["| " + " | ".join(columns.values()) + " |",
              "|" + "---|" * len(columns)]
     for _, row in df.iterrows():

@@ -92,6 +92,8 @@ def load_postings(path, descriptions=False):
     out["annual_salary"] = annual_salary(df)
     out["experience_level"] = df.get("formatted_experience_level")
     out["work_type"] = df.get("formatted_work_type")
+    url = next((c for c in ("source_url", "job_posting_url", "application_url") if c in df), None)
+    out["url"] = df[url] if url else None
     if descriptions:
         text = df["description"].fillna("") if "description" in df else pd.Series("", index=df.index)
         if "skills_desc" in df:

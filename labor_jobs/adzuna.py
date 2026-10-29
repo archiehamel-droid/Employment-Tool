@@ -51,6 +51,16 @@ def _clean(text):
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
 
+def _clean_url(url):
+    """Posting link without Adzuna's utm_ tracking tags, which carry the app ID."""
+    if not url:
+        return url
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query) if not k.startswith("utm_")]
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 def to_row(result):
     """One Adzuna result as a row in the postings format."""
     area = result.get("location", {}).get("area", [])
@@ -81,7 +91,7 @@ def to_row(result):
         "work_type": result.get("contract_time"),
         "category": (result.get("category") or {}).get("label"),
         "description": _clean(result.get("description")),
-        "source_url": result.get("redirect_url"),
+        "source_url": _clean_url(result.get("redirect_url")),
     }
 
 

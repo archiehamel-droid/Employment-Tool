@@ -167,6 +167,42 @@ The program adds three forward-looking pieces:
    Industries in JOLTS don't line up one-to-one with occupations, so the openings forecast
    is reported by industry and state, not by occupation.
 
+## Matching jobs to a resume or major
+
+After a main run, `labor_jobs.match` finds the occupations and postings in its results that
+fit a person:
+
+```bash
+python -m labor_jobs.match --major "Mechanical Engineering" --results output/adzuna-2026-10
+python -m labor_jobs.match --resume resumes/jane.pdf --results output/adzuna-2026-10 --state TX
+python -m labor_jobs.match --resume resumes/jane.docx --metro Austin --min-salary 80000
+```
+
+It writes `matches.md`, `matching_occupations.csv` and `matching_postings.csv` to
+`<results>/matches` (or `--out`).
+
+- **Major**: the major as typed ("CS", "BS in Nursing", "Biology") is matched to the
+  federal list of college programs (CIP 2020), then to the occupations each program leads
+  to, using the [NCES/BLS CIP–SOC crosswalk](https://nces.ed.gov/ipeds/cipcode/).
+  Postsecondary teaching, listed for nearly every major, is left out.
+- **Resume** (PDF, Word or text): the tool reads job titles the person has held (using the
+  same title matching as postings), the technologies they list (O*NET's hot technologies),
+  their highest degree and their major.
+- **Fit score** (0–1) per occupation: held titles (weight 3), the major (2) and shared
+  technologies (2), counting only the signals the person gave. Occupations whose BLS
+  typical entry education is higher than the person's degree count half. `--education`
+  sets the degree when there's no resume; it defaults to a bachelor's.
+- **Postings** in the best-fitting occupations are ranked by fit plus how many of the
+  posting's technologies the resume covers, and can be filtered with `--state`, `--metro`
+  and `--min-salary`. The occupation table also lists technologies common in that
+  occupation's postings that the resume doesn't mention.
+
+The resume is read in memory only. The outputs list what was found in it (titles,
+technologies, degree, major), never its text. A `resumes/` folder in the project is
+ignored by git, so resumes kept there can't be committed by accident. Adzuna descriptions
+are short snippets, so skill matches on Adzuna postings are sparse. The Kaggle
+LinkedIn postings have full descriptions.
+
 ## Setup
 
 ```bash

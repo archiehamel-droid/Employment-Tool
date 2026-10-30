@@ -241,6 +241,33 @@ It writes `matches.md`, `matching_occupations.csv` and `matching_postings.csv` t
   and `--min-salary`. The occupation table also lists technologies common in that
   occupation's postings that the resume doesn't mention.
 
+### Checking a resume against specific postings
+
+With `--resume`, each posting in the best-fitting occupations is checked against the
+requirements it states:
+
+| Check | Posting side | Resume side |
+|---|---|---|
+| Skills | Technologies its description names | Technologies on the resume |
+| Experience | Years it asks for ("5+ years of experience"), or what its title implies (Senior about 5, Staff or Director about 8, Entry level or Intern 0) | Years covered by the job date ranges, overlaps counted once and schooling left out |
+| Education | The degree it requires, noting "or equivalent experience"; if it states none, the occupation's typical entry education | Highest degree on the resume |
+| Occupation | — | The occupation fit score |
+
+Each check is meets, close, short or not stated. A posting with no shortfalls and at least
+two checks met is a **Strong match**; two or more shortfalls (or a shortfall with nothing
+met) is a **Stretch**; anything else is a **Partial match**. The report lists the postings
+by rating with what each asks for, and the technologies most often missing from the
+resume among strong and partial matches.
+
+This is a checklist of stated requirements, **not a prediction of being hired**. No data
+here records who was hired for which job, so a probability would be invented; and
+employers weigh things neither a resume nor a posting shows. Requirements are read from
+the text, so they're found only when written in the usual ways: years of experience for
+about half to two-thirds of company-board postings and a quarter of LinkedIn postings, and
+rarely for Adzuna (short snippets) or USAJOBS (no descriptions). Preferred qualifications
+are ignored, and where a posting offers alternatives ("a bachelor's and 5 years, or 8
+years"), the lower path counts.
+
 The resume is read in memory only. The outputs list what was found in it (titles,
 technologies, degree, major), never its text. A `resumes/` folder in the project is
 ignored by git, so resumes kept there can't be committed by accident. Adzuna descriptions

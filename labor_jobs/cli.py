@@ -7,7 +7,8 @@ from datetime import date
 from pathlib import Path
 
 
-from . import bls, h1b, history, jolts, merge, metros, perm, projections, report, skills
+from . import (bls, h1b, history, jolts, merge, metros, perm, projections, report, requirements,
+               skills)
 from .matching import build_matcher
 from .linkedin import load_all
 from .soc_mapping import is_gig, load_onet_titles, load_title_overrides
@@ -174,6 +175,12 @@ def main(argv=None):
         print("Finding technologies mentioned in posting descriptions...")
         mentions = skills.technologies_in_postings(postings["description"], technologies)
         postings["technologies"] = mentions.map(lambda m: "; ".join(sorted(m)))
+    if "description" in postings:
+        # Stated requirements, for checking a resume against each posting.
+        postings["years_required"] = postings["description"].map(requirements.years_required)
+        degrees = postings["description"].map(requirements.degree_required)
+        postings["degree_required"] = degrees.str[0]
+        postings["degree_flexible"] = degrees.str[1]
     postings = postings.drop(columns=["description"], errors="ignore")
 
     print("Combining...")

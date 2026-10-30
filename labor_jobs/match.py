@@ -15,8 +15,21 @@ Each occupation gets a fit score from up to three signals:
   skills technologies on the resume that the occupation's postings ask for
           (or O*NET lists for it)
 Occupations that typically need a higher degree than the person has score
-half. Postings in the best-fitting occupations are then ranked by that score
-plus how many of the posting's technologies the resume covers.
+half.
+
+Each posting in the best-fitting occupations is then checked against what it
+states it requires:
+  skills      share of the technologies its description names that the
+              resume has
+  experience  years it asks for ("5+ years of experience"), or what its title
+              implies ("Senior" ~5), against years worked on the resume
+  education   the degree it requires (allowing "or equivalent experience"), or
+              the occupation's typical entry education, against the resume's
+  occupation  the occupation fit above
+Each check is meets, close, short or not stated, and together they give a
+rating: Strong match, Partial match or Stretch. This is a checklist of stated
+requirements, not a prediction of being hired: no data here says who got
+which job.
 """
 
 import argparse
@@ -26,7 +39,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, majors, skills
+from . import bls, h1b, majors, requirements, skills
 from .matching import build_matcher
 from .report import table
 from .soc_mapping import load_onet_titles, load_title_overrides, normalize_title
@@ -84,7 +97,7 @@ def resume_profile(text, matcher, technologies, major_matcher):
     level, label = majors.education_level(text)
     return {"titles": titles, "technologies": techs,
             "majors": majors.majors_in_text(text), "education_level": level,
-            "education": label}
+            "education": label, "years": requirements.resume_years(text)}
 
 
 def _tech_names(value):
@@ -159,7 +172,96 @@ def rank_postings(postings, occupations, profile, top_occupations, states=None, 
     coverage = posting_tech.map(lambda t: len(t & resume_tech) / len(t) if t else 0.0)
     df["occupation"] = df["onet_code"].map(names)
     df["match_score"] = (df["onet_code"].map(fit) + 0.5 * coverage).round(3)
-    return df.sort_values(["match_score", "annual_salary"], ascending=False)
+    education = dict(zip(best["onet_code"], best.get("typical_education", pd.Series(dtype=object))))
+    checks = [posting_checks(row, posting_tech[i], profile, fit.get(row.onet_code),
+                             education.get(row.onet_code))
+              for i, row in zip(df.index, df.itertuples(index=False))]
+    df = df.join(pd.DataFrame(checks, index=df.index))
+    df["rating_order"] = df["rating"].map(RATING_ORDER)
+    return df.sort_values(["rating_order", "match_score", "annual_salary"],
+                          ascending=[True, False, False]).drop(columns="rating_order")
+
+
+RATINGS = ("Strong match", "Partial match", "Stretch")
+RATING_ORDER = {r: i for i, r in enumerate(RATINGS)}
+
+
+def _grade(have, need, close):
+    if have >= need:
+        return "meets"
+    return "close" if have >= close else "short"
+
+
+def posting_checks(row, posting_tech, profile, occupation_fit, occupation_education):
+    """The four checks for one posting, their descriptions, and the rating."""
+    resume_tech = set(profile["technologies"])
+    out = {}
+    # Skills the posting names.
+    if posting_tech and profile.get("from_resume"):
+        share = len(posting_tech & resume_tech) / len(posting_tech)
+        out["skills_check"] = "meets" if share >= 0.6 else ("close" if share >= 0.3 else "short")
+        out["skills_detail"] = f"{len(posting_tech & resume_tech)} of {len(posting_tech)} listed"
+    else:
+        out["skills_check"], out["skills_detail"] = "not stated", "no technologies listed"             if not posting_tech else "no resume"
+    # Experience.
+    need = getattr(row, "years_required", None)
+    need = None if need is None or pd.isna(need) else float(need)
+    basis = "asked"
+    if need is None:
+        need, label = requirements.seniority(row.title)
+        basis = label.lower() if label else None
+    have = profile.get("years")
+    if need is None or have is None:
+        out["experience_check"] = "not stated"
+        out["experience_detail"] = "no years asked" if need is None else "no dates on resume"
+    else:
+        out["experience_check"] = _grade(have, need, max(need - 1, need * 0.75))
+        asked = f"{need:g}+ yrs {basis}" if basis == "asked" else f"{basis} (~{need:g}+ yrs)"
+        out["experience_detail"] = f"{asked}; resume shows {have:g}"
+    # Education.
+    level = getattr(row, "degree_required", None)
+    flexible = bool(getattr(row, "degree_flexible", False)) and not pd.isna(getattr(row, "degree_flexible", False))
+    source = "posting"
+    if level is None or pd.isna(level):
+        level, source = majors.BLS_EDUCATION.get(occupation_education), "typical"
+    has = profile.get("education_level")
+    if level is None or has is None:
+        out["education_check"], out["education_detail"] = "not stated", "no degree stated"
+    else:
+        level = int(level)
+        name = requirements.DEGREE_NAMES.get(level, occupation_education or "degree")
+        check = "meets" if has >= level else ("close" if flexible or has == level - 1 else "short")
+        out["education_check"] = check
+        out["education_detail"] = (f"{name} required" + (" or equivalent experience" if flexible else "")
+                                   if source == "posting" else f"{name} typical for the occupation")
+    # Occupation fit.
+    if occupation_fit is None:
+        out["occupation_check"] = "not stated"
+    else:
+        out["occupation_check"] = "meets" if occupation_fit >= 0.5 else ("close" if occupation_fit >= 0.25 else "short")
+    grades = [out[k] for k in ("skills_check", "experience_check", "education_check", "occupation_check")]
+    meets, short = grades.count("meets"), grades.count("short")
+    if short == 0 and meets >= 2:
+        out["rating"] = "Strong match"
+    elif short >= 2 or (short and not meets):
+        out["rating"] = "Stretch"
+    else:
+        out["rating"] = "Partial match"
+    names = {"skills_check": "skills", "experience_check": "experience", "education_check": "education",
+             "occupation_check": "occupation"}
+    gaps = [names[k] for k in names if out[k] in ("short", "close")]
+    out["rating_reason"] = ("meets what it states" if not gaps else
+                            "check " + ", ".join(gaps))
+    return out
+
+
+def skills_to_add(postings, limit=10):
+    """Technologies most often missing from the resume among the postings
+    that are a strong or partial match."""
+    near = postings[postings["rating"].isin(RATINGS[:2])]
+    counts = near["missing_skills"].fillna("").str.split(", ").explode()
+    counts = counts[counts != ""].value_counts().head(limit)
+    return counts.rename_axis("technology").reset_index(name="postings")
 
 
 def build_report(profile, major_text, major_hits, occupations, postings, results_dir, top):
@@ -170,6 +272,8 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
                   f"- Job titles recognized: {held}",
                   f"- Technologies: {', '.join(profile['technologies']) or 'none recognized'}",
                   f"- Highest degree: {profile['education']}",
+                  "- Years of work experience (from job dates): "
+                  + (f"{profile['years']:g}" if profile.get("years") is not None else "no dates found"),
                   f"- Majors found: {', '.join(profile['majors']) or 'none'}",
                   "",
                   "The resume was read in memory only; nothing from it is saved beyond this list.",
@@ -187,12 +291,32 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
               "Fit combines held job titles, the major's usual occupations and shared "
               "technologies (0 to 1). Occupations that usually need a higher degree count half.",
               "",
-              "## Postings to look at",
+              "## Postings checked against the resume",
+              "Each posting's stated requirements against the resume. This is a checklist, "
+              "not a prediction of being hired: no data here says who got which job, and "
+              "employers weigh things a resume and a posting don't show. Experience counts "
+              "the date ranges of jobs on the resume; education uses the posting's stated "
+              "degree, or the occupation's typical one when the posting states none.",
+              "",
+              ", ".join(f"{r}: {int((postings['rating'] == r).sum()):,}" for r in RATINGS)
+              if "rating" in postings else "",
+              "",
               table(postings.head(top * 2), {
-                  "title": "Title", "company_name": "Company", "location": "Location",
-                  "annual_salary": "Salary $", "occupation": "Occupation",
-                  "matched_skills": "Your skills it lists", "url": "Link"}),
+                  "rating": "Rating", "title": "Title", "company_name": "Company",
+                  "location": "Location", "annual_salary": "Salary $",
+                  "matched_skills": "Your skills it lists", "missing_skills": "Skills it lists you lack",
+                  "experience_detail": "Experience", "education_detail": "Education",
+                  "rating_reason": "Look at", "url": "Link"}),
               ""]
+    if "rating" in postings and len(postings):
+        gaps = skills_to_add(postings)
+        if len(gaps):
+            lines += ["## Skills to add",
+                      "Technologies most often listed by strong and partial matches that the resume "
+                      "doesn't mention.",
+                      "",
+                      table(gaps, {"technology": "Technology", "postings": "Postings listing it"}),
+                      ""]
     return "\n".join(lines)
 
 

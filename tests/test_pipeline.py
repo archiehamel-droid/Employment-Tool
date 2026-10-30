@@ -826,3 +826,59 @@ def test_appending_to_a_file_in_an_older_layout(tmp_path):
         [("adzuna-1", "Nurse", "Austin, TX"), ("adzuna-2", "Welder", "Waco, TX")]
     loaded = load_postings(old)
     assert loaded["source"].tolist() == ["adzuna", "adzuna"]  # blank source worked out from the ID
+
+
+def test_reading_posting_requirements():
+    from labor_jobs.requirements import degree_required, seniority, years_required
+    assert years_required("5+ years of experience in software engineering.") == 5
+    assert years_required("Minimum of two years of related work experience.") == 2
+    assert years_required("3+ years of Python. 7+ years experience building distributed systems.") == 7
+    assert years_required("Experience with AWS preferred; 2+ years experience a plus.") is None
+    assert years_required("We have 10 years of history as a company.") is None
+    # Preferred sections don't count; alternative paths count only as the lower option.
+    assert years_required("BASIC QUALIFICATIONS:\n1+ years of experience welding\n"
+                          "PREFERRED SKILLS AND EXPERIENCE:\n5+ years of professional experience") == 1
+    assert years_required("Bachelor's and 3+ years of experience, or 7+ years of equivalent experience") == 3
+    assert degree_required("Bachelor's degree in Computer Science or equivalent experience required.") == (3, True)
+    assert degree_required("BS/BA required; Master's preferred.") == (3, False)
+    assert degree_required("High school diploma or equivalency certificate") == (0, False)
+    assert degree_required("Master's degree preferred.") == (None, False)
+    assert seniority("Associate Director, Finance") == (8, "Director or above")
+    assert seniority("Senior Data Engineer") == (5, "Senior")
+    assert seniority("Associate Attorney") == (0, "Entry level")
+    assert seniority("Nurse") == (None, None)
+
+
+def test_resume_years_of_experience():
+    from datetime import date
+    from labor_jobs.requirements import resume_years
+    text = ("Data Analyst | Acme | Jan 2022 - Present\n"
+            "Intern - Lone Star - Jun 2021 – Aug 2021\n"      # inside the next job: counted once
+            "Analyst, Foo Corp, 2019 - 2021\n"
+            "University of Texas, B.S. Statistics, 2018 - 2022\n")  # schooling: left out
+    # Jan 2019-Dec 2021 (36 months) + Jan 2022-Oct 2026 (58 months) = 94 months.
+    assert resume_years(text, date(2026, 10, 30)) == 7.8
+    assert resume_years("No dates here") is None
+
+
+def test_posting_checks_and_ratings():
+    from labor_jobs import match
+    profile = {"technologies": ["Python", "SQL", "Tableau"], "education_level": 3, "years": 3.0,
+               "from_resume": True}
+    Row = __import__("collections").namedtuple("Row", "title years_required degree_required degree_flexible onet_code")
+    strong = match.posting_checks(Row("Data Analyst", 2, 3, False, "x"), {"Python", "SQL"}, profile, 0.8,
+                                  "Bachelor's degree")
+    assert strong["rating"] == "Strong match" and strong["rating_reason"] == "meets what it states"
+    assert strong["experience_detail"] == "2+ yrs asked; resume shows 3"
+
+    senior = match.posting_checks(Row("Senior Data Scientist", None, 4, False, "x"),
+                                  {"Python", "Spark", "Kubernetes", "Scala"}, profile, 0.3, "Master's degree")
+    # ~5 years implied by "Senior" vs 3; a master's required vs a bachelor's; 1 of 4 skills.
+    assert (senior["experience_check"], senior["education_check"], senior["skills_check"]) == \
+        ("short", "close", "short")
+    assert senior["rating"] == "Stretch"
+
+    flexible = match.posting_checks(Row("Analyst", 4, 4, True, "x"), set(), profile, 0.6, None)
+    assert flexible["education_check"] == "close"  # "or equivalent experience"
+    assert flexible["skills_check"] == "not stated" and flexible["experience_check"] == "close"
+    assert flexible["rating"] == "Partial match"

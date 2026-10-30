@@ -253,8 +253,8 @@ requirements it states:
 | Education | The degree it requires, noting "or equivalent experience"; if it states none, the occupation's typical entry education | Highest degree on the resume |
 | Occupation | — | The occupation fit score |
 
-Each check is meets, close, short or not stated. A posting with no shortfalls and at least
-two checks met is a **Strong match**; two or more shortfalls (or a shortfall with nothing
+Each check is meets, close, short or not stated. A posting whose stated checks all meet
+(at least two of them) is a **Strong match**; two or more shortfalls (or a shortfall with nothing
 met) is a **Stretch**; anything else is a **Partial match**. The report lists the postings
 by rating with what each asks for, and the technologies most often missing from the
 resume among strong and partial matches.

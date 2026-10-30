@@ -26,8 +26,10 @@ states it requires:
   education   the degree it requires (allowing "or equivalent experience"), or
               the occupation's typical entry education, against the resume's
   occupation  the occupation fit above
-Each check is meets, close, short or not stated, and together they give a
-rating: Strong match, Partial match or Stretch. This is a checklist of stated
+Each check is meets, close, short or not stated. A posting whose stated
+checks all meet (at least two of them) is a Strong match; two or more
+shortfalls, or one with nothing met, is a Stretch; the rest are Partial
+matches. This is a checklist of stated
 requirements, not a prediction of being hired: no data here says who got
 which job.
 """
@@ -240,8 +242,8 @@ def posting_checks(row, posting_tech, profile, occupation_fit, occupation_educat
     else:
         out["occupation_check"] = "meets" if occupation_fit >= 0.5 else ("close" if occupation_fit >= 0.25 else "short")
     grades = [out[k] for k in ("skills_check", "experience_check", "education_check", "occupation_check")]
-    meets, short = grades.count("meets"), grades.count("short")
-    if short == 0 and meets >= 2:
+    meets, close, short = grades.count("meets"), grades.count("close"), grades.count("short")
+    if short == 0 and close == 0 and meets >= 2:
         out["rating"] = "Strong match"
     elif short >= 2 or (short and not meets):
         out["rating"] = "Stretch"
@@ -257,8 +259,8 @@ def posting_checks(row, posting_tech, profile, occupation_fit, occupation_educat
 
 def skills_to_add(postings, limit=10):
     """Technologies most often missing from the resume among the postings
-    that are a strong or partial match."""
-    near = postings[postings["rating"].isin(RATINGS[:2])]
+    that are a strong or partial match, in occupations the resume fits well."""
+    near = postings[postings["rating"].isin(RATINGS[:2]) & (postings["occupation_check"] == "meets")]
     counts = near["missing_skills"].fillna("").str.split(", ").explode()
     counts = counts[counts != ""].value_counts().head(limit)
     return counts.rename_axis("technology").reset_index(name="postings")
@@ -312,8 +314,8 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
         gaps = skills_to_add(postings)
         if len(gaps):
             lines += ["## Skills to add",
-                      "Technologies most often listed by strong and partial matches that the resume "
-                      "doesn't mention.",
+                      "Technologies most often listed by strong and partial matches, in occupations "
+                      "the resume fits well, that the resume doesn't mention.",
                       "",
                       table(gaps, {"technology": "Technology", "postings": "Postings listing it"}),
                       ""]

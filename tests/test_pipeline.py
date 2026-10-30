@@ -878,6 +878,9 @@ def test_posting_checks_and_ratings():
         ("short", "close", "short")
     assert senior["rating"] == "Stretch"
 
+    close = match.posting_checks(Row("Data Analyst", 2, 4, False, "x"), {"Python", "SQL"}, profile, 0.8, None)
+    assert close["education_check"] == "close" and close["rating"] == "Partial match"  # a master's asked
+
     flexible = match.posting_checks(Row("Analyst", 4, 4, True, "x"), set(), profile, 0.6, None)
     assert flexible["education_check"] == "close"  # "or equivalent experience"
     assert flexible["skills_check"] == "not stated" and flexible["experience_check"] == "close"

@@ -114,9 +114,11 @@ TECH_ROLES = {
     "specialist": "15-1211.00",
     "tester": "15-1253.00",         # Software Quality Assurance Analysts and Testers
 }
-# " - " and also a dash spaced on one side ("Patent Agent- Biologics"),
-# but not a hyphen inside a word ("Full-Stack").
-SEPARATORS = re.compile(r"\s+[-–—:|]\s*|\s*[-–—:]\s+|[,|/]")
+SEPARATORS = re.compile(r"\s+[-–—:|]\s+|[,|/]")
+# A dash spaced only after it ends a title of two or more words ("Senior
+# Patent Agent- Biologics"); after one word it usually doesn't ("Physician-
+# Cardiologist"), and a hyphen inside a word ("Full-Stack") never does.
+HALF_SPACED_DASH = re.compile(r"^(\S+\s+\S.*?)[-–—]\s+\S")
 # Federal hiring authorities and pay grades ("Direct-Hire Authority",
 # "NF-04", "GS-12"), which say nothing about the occupation.
 FEDERAL_NOISE = re.compile(r"\bdirect[\s-]*hire\s+authority\b|\bdha\b|\b(?:gs|gm|wg|wl|ws|nf|na|nl)[\s-]?\d{1,2}\b")
@@ -151,8 +153,10 @@ def title_variants(text):
     """The full title, then the part before the first separator."""
     if not isinstance(text, str):
         return []
-    stripped = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", text)
-    variants = [normalize_title(stripped), normalize_title(SEPARATORS.split(stripped)[0])]
+    stripped = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", text).strip(" -–—:|")
+    first = SEPARATORS.split(stripped)[0]
+    half = HALF_SPACED_DASH.match(first)
+    variants = [normalize_title(stripped), normalize_title(half.group(1) if half else first)]
     # A lone "manager" or "specialist" says nothing about the occupation.
     return list(dict.fromkeys(v for v in variants if v and v not in GENERIC_WORDS))
 

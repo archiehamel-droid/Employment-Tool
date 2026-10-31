@@ -135,19 +135,44 @@ DEGREE = (r"(?:bachelor'?s?|master'?s?|associate'?s?|doctor(?:ate)?|ph\.\s?d\.?|
           r"[bm]\.\s?(?:s|a|sc|eng)\.?|[bm](?:s|a|sc|eng)(?=\s+in\b)|bsn|msn|meng|beng)")
 
 
+MONTH_WORDS = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
+               r"sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
+# Where a field of study ends: a date, a school, honors and the like.
+FIELD_END = re.compile(
+    r"(?i)\s{2,}|\s*\b(?:from|at|with|minor|gpa|university|college|institute|school|expected|"
+    r"graduated|graduation|anticipated|class of|cum laude|magna|summa|honors|dean'?s|"
+    + MONTH_WORDS + r")\b|\d|\(|\|")
+NOT_FIELDS = {"science", "arts", "degree", "program", "candidate", "student", "studies", "general",
+              "and", "in", "of", "the"}
+MAJOR_AFTER_DEGREE = re.compile(
+    rf"(?i)(?<![A-Za-z]){DEGREE}(?![A-Za-z])(?:[ \t]+(?:of|degree))?(?:[ \t]+(?:science|arts))?"
+    r"([ \t]*(?:in\b|of\b|[,:\-\u2013\u2014])[ \t]*|[ \t]+)([A-Za-z][A-Za-z&/ ]{2,60})")
+MAJOR_LABEL = re.compile(r"(?im)^[ \t]*major[ \t]*[:\-][ \t]*(.+)$|\bmajor(?:ing|ed)?[ \t]+in[ \t]+"
+                         r"([A-Za-z][A-Za-z&/ ]{2,60})")
+
+
+def _field(text):
+    """The field of study at the start of text, or None."""
+    field = FIELD_END.split(text, maxsplit=1)[0]
+    field = re.sub(r"(?i)^applied (?:science|arts) in\s+", "", field)
+    field = re.sub(r"(?i)(\s+(?:and|in|of|&))+$", "", field.strip(" ,.-&/"))
+    if len(field) < 3 or field.lower() in NOT_FIELDS:
+        return None
+    return field
+
+
 def majors_in_text(text):
     """Field-of-study phrases in resume text, like "B.S. in Computer
-    Science" -> "Computer Science"."""
+    Science" -> "Computer Science". Dates, schools and honors after the
+    degree ("Bachelor of Science, October 2022") are not fields."""
     found = []
-    pattern = re.compile(
-        rf"(?i)(?<![A-Za-z]){DEGREE}(?![A-Za-z])(?:\s+(?:of|degree))?(?:\s+(?:science|arts))?"
-        r"\s*(?:in|of|,|:|-|\u2013|\u2014)\s*([A-Z][A-Za-z&/ ]{2,60})")
-    for m in pattern.finditer(text):
-        field = re.split(r"\s{2,}|\s(?:from|at|with|minor|GPA|University|College)\b", m.group(1))[0]
-        field = re.sub(r"(?i)^applied (?:science|arts) in\s+", "", field)
-        found.append(field.strip(" ,.-"))
-    for m in re.finditer(r"(?im)^\s*major\s*[:\-]\s*(.+)$", text):
-        found.append(m.group(1).strip())
+    for m in MAJOR_AFTER_DEGREE.finditer(text):
+        # Without "in" or punctuation, only a capitalized word starts a field.
+        if not m.group(1).strip() and not m.group(2)[0].isupper():
+            continue
+        found.append(_field(m.group(2)))
+    for m in MAJOR_LABEL.finditer(text):
+        found.append(_field(m.group(1) or m.group(2)))
     if re.search(r"\bMBA\b", text):
         found.append("MBA")
     return list(dict.fromkeys(f for f in found if f))

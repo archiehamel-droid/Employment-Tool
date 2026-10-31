@@ -849,6 +849,31 @@ def test_reading_posting_requirements():
     assert seniority("Nurse") == (None, None)
 
 
+def test_majors_skip_dates_and_schools():
+    from labor_jobs.majors import majors_in_text
+    assert majors_in_text("Bachelor of Science, October 2022") == []
+    assert majors_in_text("Bachelor's degree (October 2025)") == []
+    assert majors_in_text("Bachelor of Science\nUniversity of Michigan") == []
+    assert majors_in_text("BS in Computer Science - October 2024") == ["Computer Science"]
+    assert majors_in_text("B.A. Psychology, May 2020") == ["Psychology"]
+    assert majors_in_text("Bachelor of Business Administration, Dec 2020") == ["Business Administration"]
+    assert majors_in_text("Degree: Bachelor of Science in Nursing, Graduated October 2019") == ["Nursing"]
+    assert majors_in_text("B.S. Mechanical Engineering   Ohio State University") == ["Mechanical Engineering"]
+
+
+def test_resume_technologies_ignore_case_but_not_everyday_words():
+    from labor_jobs import skills
+    tech = pd.DataFrame({"example": ["Python", "Microsoft Excel", "Microsoft Word", "Atlassian JIRA",
+                                     "Epic Systems", "PostgreSQL"], "hot": True})
+    rows = skills.resume_aliases(tech)
+    find = lambda text: skills.resume_technologies(text, rows)  # noqa: E731
+    assert find("Skills: python, jira, MS Excel, Postgres") == ["Excel", "JIRA", "PostgreSQL", "Python"]
+    assert find("PYTHON | EXCEL") == ["Excel", "Python"]
+    # Everyday words: not in running text, but "Word" counts in a list of skills.
+    assert find("I excel at word processing and epic projects.") == []
+    assert find("Tools: Word, Excel, Snowflake") == ["Excel", "Microsoft Word", "Snowflake"]
+
+
 def test_resume_years_of_experience():
     from datetime import date
     from labor_jobs.requirements import resume_years

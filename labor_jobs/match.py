@@ -75,7 +75,7 @@ def title_candidates(text, technologies=()):
     for line in text.splitlines():
         if line.count(",") >= 3:
             continue
-        for part in re.split(r"\s+[|–—-]\s+|\s+at\s+|,|\t|\s{3,}", line):
+        for part in re.split(r"\s+[|–—-]\s+|\s+at\s+|,|\t|\s{2,}", line):
             part = part.strip(" •*·:")
             words = part.split()
             if 1 <= len(words) <= 7 and re.search(r"[A-Za-z]{3}", part) \
@@ -87,15 +87,15 @@ def title_candidates(text, technologies=()):
 
 def resume_profile(text, matcher, technologies, major_matcher):
     """What the resume says, as plain data (no resume text kept)."""
-    pattern, lookup = skills.mention_pattern(technologies)
-    candidates = pd.Series(title_candidates(text, lookup), dtype=object)
+    aliases = skills.resume_aliases(technologies)
+    candidates = pd.Series(title_candidates(text, [r["alias"] for r in aliases]), dtype=object)
     titles = {}
     if len(candidates):
         mapped = matcher.map_titles(candidates)
         for phrase, row in zip(candidates, mapped.itertuples()):
             if row.match_method in CONFIDENT_METHODS and isinstance(row.onet_code, str):
                 titles.setdefault(row.onet_code, phrase)
-    techs = sorted({lookup[m] for m in pattern.findall(text)})
+    techs = skills.resume_technologies(text, aliases)
     level, label = majors.education_level(text)
     return {"titles": titles, "technologies": techs,
             "majors": majors.majors_in_text(text), "education_level": level,
@@ -381,8 +381,10 @@ def main(argv=None):
         profile["education_level"] = EDUCATION_CHOICES[args.education]
         profile["education"] = args.education.title()
 
-    major_text = args.major or (profile["majors"][0] if profile["majors"] else None)
-    major_hits = major_matcher.match(major_text) if major_text else []
+    # A given major wins; otherwise the first major on the resume that names a program.
+    options = [args.major] if args.major else profile["majors"]
+    major_text, major_hits = next(((t, h) for t in options if (h := major_matcher.match(t))),
+                                  (options[0] if options else None, []))
     major_socs = set(major_matcher.occupations_for([c for c, _, _ in major_hits])) if major_hits else None
     if major_text and not major_hits:
         print(f"Couldn't match the major \"{major_text}\" to a college program; ignoring it.")

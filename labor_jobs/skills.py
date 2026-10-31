@@ -176,6 +176,103 @@ def mention_pattern(technologies):
     return re.compile(rf"(?<![\w+#.])(?:{alternation})(?![\w+#])"), lookup
 
 
+# Resumes write product names more loosely than postings ("python", "MS Excel",
+# "Github"), so resume matching ignores case, except for names that are also
+# everyday words or names: those match as capitalized or in capitals only.
+CASE_SENSITIVE = {
+    "excel", "react", "ruby", "hive", "asana", "workday", "maven", "tomcat", "kafka",
+    "confluence", "angular", "selenium", "node", "epic", "git", "sap", "sas", "illustrator",
+    "acrobat", "redshift", "jenkins", "vue", "mongo", "scala", "terraform", "cassandra",
+    "looker", "snowflake", "rust", "go", "swift", "canva", "slack", "zoom", "r",
+}
+# Other ways resumes write technologies on O*NET's list.
+RESUME_SPELLINGS = {
+    "MS Excel": "Excel", "MS Word": "Microsoft Word", "MS Office": "Microsoft Office",
+    "Office 365": "Microsoft Office", "Microsoft 365": "Microsoft Office", "O365": "Microsoft Office",
+    "MS Office Suite": "Microsoft Office", "MS PowerPoint": "PowerPoint", "Power Point": "PowerPoint",
+    "MS Access": "Microsoft Access", "MS Outlook": "Microsoft Outlook", "MS Project": "Microsoft Project",
+    "MS Teams": "Microsoft Teams", "MS Visio": "Visio", "MS SQL": "SQL Server", "MSSQL": "SQL Server",
+    "MS SQL Server": "SQL Server", "T-SQL": "Transact-SQL", "Postgres": "PostgreSQL", "Mongo": "MongoDB",
+    "K8s": "Kubernetes", "NodeJS": "Node.js", "Node": "Node.js", "ReactJS": "React", "React.js": "React",
+    "React Native": "React", "AngularJS": "Angular", "Angular.js": "Angular", "VueJS": "Vue.js",
+    "Vue": "Vue.js", "PySpark": "Apache Spark", "G Suite": "Google Workspace", "GSuite": "Google Workspace",
+    "Google Suite": "Google Workspace", "Splunk": "Splunk Enterprise",
+    "Teradata": "Teradata Database", "SPSS": "SPSS Statistics", "SketchUp": "SketchUp Pro",
+    "Epic": "Epic Systems", "Civil 3D": "AutoCAD Civil 3D", "Adobe Creative Suite": "Adobe Creative Cloud",
+    "Creative Suite": "Adobe Creative Cloud", "Adobe Acrobat Pro": "Acrobat", "Quick Books": "QuickBooks",
+}
+# Everyday words that name a product only in a list of skills
+# ("Word, Excel, Outlook"), never in running text.
+RESUME_LIST_ONLY = {
+    "Word": "Microsoft Word", "Access": "Microsoft Access", "Outlook": "Microsoft Outlook",
+    "Teams": "Microsoft Teams", "Project": "Microsoft Project", "Windows": "Microsoft Windows",
+    "Office": "Microsoft Office", "Spark": "Apache Spark", "Sheets": "Google Sheets", "Docs": "Google Docs",
+    "Jenkins": "Jenkins CI", "R": "R", "Go": "Go", "Swift": "Swift", "Canva": "Canva", "Slack": "Slack", "Zoom": "Zoom",
+}
+# Common on resumes but not on O*NET's hot list. They are shown as found but
+# can't count toward an occupation, whose technologies come from that list.
+RESUME_EXTRA = (
+    "Snowflake", "Databricks", "dbt", "Looker", "Jupyter", "pandas", "NumPy", "scikit-learn",
+    "Google Cloud", "GCP", "Kotlin", "Golang", "Rust", "Bash", "Airflow", "Stata", "Power Automate",
+    "Power Apps", "Smartsheet", "Trello", "Notion", "Google Ads", "Mailchimp", "Adobe Premiere Pro",
+    "Premiere Pro", "Lightroom", "Final Cut Pro", "Microsoft Dynamics 365", "NetSuite", "Xero",
+)
+# A line listing skills: a "Skills:" style label, or several separators.
+LIST_LINE = re.compile(r"(?i)^\W*(skills|tools|technologies|technical|software|proficien\w*|languages|"
+                       r"programs|platforms)\b[^:]{0,30}:|[,;|•·].*[,;|•·]")
+
+
+def resume_aliases(technologies):
+    """Rows of (alias, name, mode) for reading technologies on a resume. mode
+    is "i" (any case), "c" (as written or in capitals) or "l" (as written,
+    and only on a line listing skills)."""
+    _, lookup = mention_pattern(technologies)
+    names = set(lookup.values())
+    mode = lambda alias: "c" if alias.lower() in CASE_SENSITIVE else "i"  # noqa: E731
+    rows = {alias: (name, mode(alias)) for alias, name in lookup.items()}
+    for alias, name in RESUME_SPELLINGS.items():
+        if name in names:
+            rows.setdefault(alias, (name, mode(alias)))
+    for alias, name in RESUME_LIST_ONLY.items():
+        if name in names or name == alias:
+            rows.setdefault(alias, (name, "l"))
+    for name in RESUME_EXTRA:
+        rows.setdefault(name, (name, mode(name)))
+    return [{"alias": a, "name": n, "mode": m} for a, (n, m) in sorted(rows.items())]
+
+
+def _alternation(aliases):
+    return "|".join(re.escape(a) for a in sorted(set(aliases), key=len, reverse=True))
+
+
+def resume_technologies(text, rows):
+    """Display names of the technologies a resume mentions, sorted."""
+    if not isinstance(text, str) or not rows:
+        return []
+    lower, exact, listed = {}, {}, {}
+    for r in rows:
+        if r["mode"] == "i":
+            lower.setdefault(r["alias"].lower(), r["name"])
+        elif r["mode"] == "c":
+            exact.setdefault(r["alias"], r["name"])
+            exact.setdefault(r["alias"].upper(), r["name"])
+        else:
+            listed.setdefault(r["alias"], r["name"])
+            listed.setdefault(r["alias"].upper(), r["name"])
+    edge = r"(?<![\w+#.])(?:{})(?![\w+#])"
+    found = set()
+    if lower:
+        found.update(lower[m.lower()] for m in re.findall("(?i)" + edge.format(_alternation(lower)), text))
+    if exact:
+        found.update(exact[m] for m in re.findall(edge.format(_alternation(exact)), text))
+    if listed:
+        pattern = re.compile(edge.format(_alternation(listed)))
+        for line in text.splitlines():
+            if LIST_LINE.search(line):
+                found.update(listed[m] for m in pattern.findall(line))
+    return sorted(found)
+
+
 def technologies_in_postings(descriptions, technologies):
     """Set of hot technologies mentioned in each posting's description."""
     pattern, lookup = mention_pattern(technologies)

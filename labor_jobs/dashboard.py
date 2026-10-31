@@ -152,8 +152,7 @@ def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_y
     index = {**employer, **matcher.lookup}
     _save(out, "title_index", [{"k": k, "o": v} for k, v in sorted(index.items())])
 
-    pattern, lookup = skills.mention_pattern(technologies)
-    _save(out, "tech_aliases", [{"alias": a, "name": n} for a, n in sorted(lookup.items())])
+    _save(out, "tech_aliases", skills.resume_aliases(technologies))
 
     cip_csv, crosswalk = majors.cip_files(cache, user_agent)
     mm = majors.MajorMatcher(cip_csv, crosswalk)

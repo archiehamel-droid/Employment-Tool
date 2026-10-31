@@ -77,6 +77,7 @@ MODIFIER_WORDS = {
     "supervisory",  # federal titles: "Supervisory Accountant"
 }
 MAX_DROPPED_WORDS = 2
+MAX_CONTAINED_WORDS = 6
 # (pattern on the lowercased raw title, O*NET code).
 KEYWORD_RULES = [
     (re.compile(r"\bcdl\b|\bclass a\b.*\bdriver|\botr\b.*\bdriver|\btruck driver"),
@@ -102,6 +103,18 @@ NOT_DISTINCTIVE = GENERIC_WORDS | {
     "sale", "senior", "general", "worker",
 }
 MAX_TRAILING_ABBREVIATIONS = 2
+# A title made only of these ("assistant manager", "team member") is too
+# vague to pick out of a longer one.
+ROLE_WORDS = (GENERIC_WORDS - {"trainee", "intern", "lead"}) | {"foreman", "superintendent", "chief", "inspector", "instructor", "trainer"}
+# Known titles too vague, or tied to the wrong occupation, to pick out of a
+# longer title ("Occupational Safety and Health Manager" isn't a health
+# services manager; "High School SAT Prep Teacher" isn't a principal).
+CONTAINED_SKIP = {
+    "health technician", "health manager", "high school", "program coordinator", "program director",
+    "system specialist", "repair technician", "operation clerk", "process worker", "system mechanic",
+    "vehicle operator", "design engineer",
+}
+NOT_CONTAINED = GENERIC_WORDS | MODIFIER_WORDS | {"team", "member", "crew", "support", "and", "of", "general"}
 # Role after a technology name ("Power BI Developer") -> O*NET code.
 TECH_ROLES = {
     "developer": "15-1252.00",      # Software Developers
@@ -122,6 +135,17 @@ HALF_SPACED_DASH = re.compile(r"^(\S+\s+\S.*?)[-–—]\s+\S")
 # Federal hiring authorities and pay grades ("Direct-Hire Authority",
 # "NF-04", "GS-12"), which say nothing about the occupation.
 FEDERAL_NOISE = re.compile(r"\bdirect[\s-]*hire\s+authority\b|\bdha\b|\b(?:gs|gm|wg|wl|ws|nf|na|nl)[\s-]?\d{1,2}\b")
+# Job-ad extras around the title: pay, requisition and store numbers, years,
+# shifts and hours, perks ("Travel ICU RN - $2,926 per week", "Cook #1178",
+# "Sales Associate S24123", "Personal Assistant PT 3p-11p").
+AD_NOISE = re.compile(
+    r"(?:paying\s+)?(?:up\s+to\s+)?\$\s?[\d,.]+\s*k?(?:\s*(?:-|to)\s*\$?\s?[\d,.]+\s*k?)?"
+    r"(?:\s*(?:/|per|an|a)\s*(?:hr|hour|week|wk|year|yr|month|mo)\b)?"
+    r"|\bper\s+(?:week|hour|year)\b|\b(?:summer|fall|spring|winter)\s+\d{4}\b|#\s*\d+|\b[a-z]{1,3}-?\d{3,}\b|\b\d{4,}\b"
+    r"|\b(?:1st|2nd|3rd|first|second|third|day|night|evening|overnight|weekend|swing|closing|opening)\s+shift\b"
+    r"|\b\d{1,2}(?::\d{2})?\s*[ap]m?\s*-\s*\d{1,2}(?::\d{2})?\s*[ap]m?\b"
+    r"|\bsign[\s-]*on\s+bonus\b.*|\bnew\s+grads?\s+welcome\b|\bbonus\s+available\b|\bnon[\s-]*union\b"
+    r"|\b(?:summer|fall|spring|winter)\s+(?=intern)|\bdirect\s+hiring\s+event\b.*")
 # "IP" in legal titles is intellectual property; elsewhere it's networking.
 LEGAL_IP = re.compile(r"\bip(?=\s+(?:counsel|attorney|lawyer|paralegal|litigat\w*|legal|docket\w*|specialist|"
                       r"director|manager|associate|agent)\b)")
@@ -141,7 +165,7 @@ def normalize_title(text):
         return ""
     text = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", text.lower())
     text = re.sub(r"\b(full|part)[\s-]*time\b", " ", text)
-    text = LEGAL_IP.sub("intellectual property", FEDERAL_NOISE.sub(" ", text))
+    text = LEGAL_IP.sub("intellectual property", FEDERAL_NOISE.sub(" ", AD_NOISE.sub(" ", text)))
     tokens = []
     for token in re.sub(r"[^a-z0-9+#]+", " ", text).split():
         tokens.extend(ABBREVIATIONS.get(token, token).split())
@@ -299,7 +323,7 @@ class TitleMatcher:
 
         # Technology before partial, so "Ruby on Rails Engineer" isn't cut
         # down to "rails engineer" (a railroad job).
-        for tier in (self._employer, self._keyword, self._technology, self._partial):
+        for tier in (self._employer, self._keyword, self._technology, self._partial, self._contained):
             still = []
             for raw, variants in pending:
                 hit = tier(raw) if tier == self._keyword else tier(variants)
@@ -354,6 +378,22 @@ class TitleMatcher:
                     key = " ".join(suffix)
                     if key in self.lookup:
                         return self.lookup[key], "partial", 100.0
+        return None
+
+    def _contained(self, variants):
+        """A known title of two or more words inside a longer one ("Travel
+        Cardiac Stepdown RN" contains "registered nurse"). The longest wins,
+        then the one nearer the end, where English puts the job's head noun.
+        Not when a role word follows it: in "Food Service Worker Supervisor"
+        the job is the supervisor's."""
+        for v in reversed(variants):
+            words = v.split()
+            for n in range(min(len(words) - 1, MAX_CONTAINED_WORDS), 1, -1):
+                for start in range(len(words) - n, -1, -1):
+                    key = " ".join(words[start:start + n])
+                    if key in self.lookup and key not in CONTAINED_SKIP and not set(key.split()) <= NOT_CONTAINED \
+                            and not ROLE_WORDS & set(words[start + n:]):
+                        return self.lookup[key], "contained", 100.0
         return None
 
     def _keyword(self, raw):

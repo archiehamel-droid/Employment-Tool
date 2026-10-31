@@ -21,7 +21,7 @@ UX Designer,15-1255,Web and Digital Interface Designers
 User Experience Designer,15-1255,Web and Digital Interface Designers
 UI UX Designer,15-1255,Web and Digital Interface Designers
 Product Designer,15-1255,Web and Digital Interface Designers
-Assistant Property Manager,11-9141,"Property, Real Estate, and Community Association Managers"
+Assistant Property Manager,11-9141,"""Property, Real Estate, and Community Association Managers"""
 Business Development Manager,11-2022,Sales Managers
 Operations Specialist,-,Too vague to place in one occupation (O*NET lists it under Airfield Operations)
 Operations Coordinator,-,Too vague
@@ -53,7 +53,7 @@ Assistant United States Attorney,23-1011,Lawyers
 Attorney Advisor,23-1011,Lawyers (federal title)
 Housekeeping Aid,37-2012,Maids and Housekeeping Cleaners (federal title)
 Housekeeping Aid Supervisor,37-1011,First-Line Supervisors of Housekeeping and Janitorial Workers
-Educational Aide,25-9045,"Teaching Assistants, Except Postsecondary (federal title)"
+Educational Aide,25-9045,"""Teaching Assistants, Except Postsecondary (federal title)"""
 Child and Youth Program Assistant,39-9011,Childcare Workers (federal title)
 Cook Supervisor,35-1012,First-Line Supervisors of Food Preparation and Serving Workers
 Patent Agent,23-1011,Lawyers (registered patent practitioners)
@@ -71,3 +71,65 @@ Trademark Counsel,23-1011,Lawyers
 Patent Paralegal,23-2011,Paralegals and Legal Assistants
 Patent Docketing Specialist,23-2011,Paralegals and Legal Assistants
 Intellectual Property Docketing Specialist,23-2011,Paralegals and Legal Assistants
+Clinical Nurse,29-1141,"Registered Nurses (a staff RN, not a clinical nurse specialist)"
+Licensed Professional Counselor,21-1014,Mental Health Counselors
+Direct Support Professional,31-1122,Personal Care Aides
+Special Agent,33-3021,Detectives and Criminal Investigators
+Physical Scientist,19-2099,"Physical Scientists, All Other"
+Engineering Technician,17-3029,"Engineering Technologists and Technicians, Except Drafters, All Other"
+Advanced Practice Provider,29-1171,Nurse Practitioners (APPs are mostly NPs)
+Advanced Practice Nurse,29-1171,Nurse Practitioners
+Motor Vehicle Operator,53-3099,"Motor Vehicle Operators, All Other (federal title)"
+Contract Specialist,13-1023,"Purchasing Agents (federal contracting, OPM 1102)"
+Contract Administrator,13-1023,Purchasing Agents
+Interdisciplinary,17-2199,"Engineers, All Other (federal multi-series engineer/scientist posts)"
+Interdisciplinary Engineer,17-2199,"Engineers, All Other"
+General Engineer,17-2199,"Engineers, All Other (OPM 0801)"
+Healthcare Engineer,17-2199,"Engineers, All Other (VA facility engineering)"
+CT Technologist,29-2034,Radiologic Technologists and Technicians
+Training Technician,25-9099,"Educational Instruction and Library Workers, All Other (OPM 1702)"
+Training Instructor,13-1151,Training and Development Specialists
+Foreign Affairs Officer,19-3094,Political Scientists (OPM 0130)
+Foreign Affairs Specialist,19-3094,Political Scientists (OPM 0130)
+Safety and Occupational Health Manager,19-5011,Occupational Health and Safety Specialists
+Safety and Occupational Health Specialist,19-5011,Occupational Health and Safety Specialists
+Occupational Safety and Health Manager,19-5011,Occupational Health and Safety Specialists
+Financial Management Specialist,13-2099,"Financial Specialists, All Other (OPM 0501)"
+Emergency Management Specialist,11-9161,Emergency Management Directors
+Staff Administrator,11-3012,Administrative Services Managers (Army Reserve)
+Army Reserve Administrator,11-3012,Administrative Services Managers
+Construction Control Representative,47-4011,Construction and Building Inspectors
+Tools and Parts Attendant,43-5071,"Shipping, Receiving, and Inventory Clerks (federal WG-6904)"
+Recreation Aid,39-9032,Recreation Workers
+Staff Assistant,43-6014,Secretaries and Administrative Assistants
+Peer Specialist,21-1094,Community Health Workers (VA peer support)
+Peer Support Specialist,21-1094,Community Health Workers
+Cemetery Caretaker,37-3011,Landscaping and Groundskeeping Workers
+Office Automation Assistant,43-9061,"Office Clerks, General"
+Office Automation Clerk,43-9061,"Office Clerks, General"
+Docketing Technician,43-6012,Legal Secretaries and Administrative Assistants
+Education Services Specialist,21-1012,"Educational, Guidance, and Career Counselors"
+Attorney Adviser,23-1011,Lawyers (federal title)
+Chief of Staff,11-1021,General and Operations Managers
+Housing Management Specialist,11-9141,"Property, Real Estate, and Community Association Managers"
+Meatcutting Worker,51-3021,Butchers and Meat Cutters (federal title)
+Sales Store Checker,41-2011,Cashiers (commissary)
+Air Operations Specialist,53-2022,Airfield Operations Specialists
+Financial Technician,43-3031,"Bookkeeping, Accounting, and Auditing Clerks"
+Military Pay Technician,43-3051,Payroll and Timekeeping Clerks
+Clinical Pharmacy Specialist,29-1051,Pharmacists
+Clinical Pharmacist Practitioner,29-1051,Pharmacists
+Materials Examiner and Identifier,43-5071,"Shipping, Receiving, and Inventory Clerks"
+Materials Handler Supervisor,53-1047,First-Line Supervisors of Material Moving Workers
+Heavy Mobile Equipment Repairer Supervisor,49-1011,First-Line Supervisors of Mechanics
+Heavy Mobile Equipment Mechanic Supervisor,49-1011,First-Line Supervisors of Mechanics
+Plumbing Worker Supervisor,47-1011,First-Line Supervisors of Construction Trades
+Electrical Worker Supervisor,47-1011,First-Line Supervisors of Construction Trades
+Food Service Worker Supervisor,35-1012,First-Line Supervisors of Food Preparation and Serving Workers
+Ammunition Inspector,51-9061,"Inspectors, Testers, Sorters, Samplers, and Weighers"
+Licensed Practical Vocational Nurse,29-2061,Licensed Practical and Licensed Vocational Nurses
+Medical Records Administration Specialist,29-2072,Medical Records Specialists
+Protocol Specialist,13-1121,"Meeting, Convention, and Event Planners"
+Victim Witness Specialist,21-1093,Social and Human Service Assistants
+Asphalt Estimator,13-1051,Cost Estimators
+Policy Analyst,13-1111,Management Analysts (O*NET lists it under insurance policy clerks)

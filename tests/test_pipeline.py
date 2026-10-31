@@ -930,3 +930,20 @@ def test_title_relevance_favors_rare_shared_words():
     assert scores[0] == max(scores) and scores[0] > 0.7
     assert scores[1] < scores[3] < scores[0]  # bare "Attorney" between the patent and family-law titles
     assert scores[1] < 0.3
+
+
+def test_ad_noise_and_contained_titles():
+    ref = pd.DataFrame({"title": ["Registered Nurse", "Retail Salesperson", "Sales Associate", "Food Service Worker",
+                                  "Physical Therapist"],
+                        "onet_code": ["29-1141.00", "41-2031.00", "41-2031.00", "35-3023.00", "29-1123.00"]})
+    m = TitleMatcher(ref)
+    out = m.map_titles(pd.Series([
+        "Travel Cardiac Stepdown RN - $2,084 per week",            # pay stripped, RN found inside
+        "LEAD SALES ASSOCIATE-PT in MINOT ND S24123",               # store number and town around it
+        "Full-Time Licensed Physical Therapist at Rehab Center",
+        "Food Service Worker Supervisor",                           # the job is the supervisor's: no match
+    ]))
+    assert out["onet_code"].tolist()[:3] == ["29-1141.00", "41-2031.00", "29-1123.00"]
+    assert pd.isna(out["onet_code"].iloc[3])
+    assert normalize_title("Process Lead, Allston, #1178") == "process allston"
+    assert normalize_title("Quantitative Trader Intern - Summer 2027") == "quantitative trader intern"

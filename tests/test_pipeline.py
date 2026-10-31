@@ -910,3 +910,23 @@ def test_posting_checks_and_ratings():
     assert flexible["education_check"] == "close"  # "or equivalent experience"
     assert flexible["skills_check"] == "not stated" and flexible["experience_check"] == "close"
     assert flexible["rating"] == "Partial match"
+
+
+def test_patent_and_federal_titles_normalize():
+    assert title_variants("Patent Examiner (Physics) Direct-Hire Authority (DHA)") == ["patent examiner"]
+    assert title_variants("Senior Patent Agent- Biologics")[-1] == "patent agent"
+    assert title_variants("IP Counsel, Trademarks & Domains")[-1] == "intellectual property counsel"
+    assert normalize_title("IP Network Engineer") == "ip network engineer"  # networking IP stays
+    assert normalize_title("Veterinarian NF-04") == "veterinarian"
+    assert normalize_title("Full-Stack Engineer") == "full stack engineer"
+
+
+def test_title_relevance_favors_rare_shared_words():
+    from labor_jobs.match import title_relevance
+    words = set(normalize_title("Patent Attorney at Smith LLP, patent prosecution").split())
+    titles = ["Patent Counsel", "Family Law Attorney", "Litigation Attorney", "Attorney", "Real Estate Attorney"]
+    scores = title_relevance(titles, words)
+    # "counsel" and "attorney" count as the same word; "patent" is rare, so it counts most.
+    assert scores[0] == max(scores) and scores[0] > 0.7
+    assert scores[1] < scores[3] < scores[0]  # bare "Attorney" between the patent and family-law titles
+    assert scores[1] < 0.3

@@ -35,6 +35,7 @@ which job.
 """
 
 import argparse
+import math
 import os
 import re
 from pathlib import Path
@@ -99,7 +100,9 @@ def resume_profile(text, matcher, technologies, major_matcher):
     level, label = majors.education_level(text)
     return {"titles": titles, "technologies": techs,
             "majors": majors.majors_in_text(text), "education_level": level,
-            "education": label, "years": requirements.resume_years(text)}
+            "education": label, "years": requirements.resume_years(text),
+            # Words of the resume, for comparing posting titles; not written to any output.
+            "words": set(normalize_title(text).split())}
 
 
 def _tech_names(value):
@@ -153,6 +156,44 @@ def score_occupations(detailed, profile, major_socs):
     return out.sort_values(["fit_score", "postings"], ascending=False)
 
 
+RELEVANCE_STOP = {"and", "of", "the", "for", "to", "in", "with", "at", "on", "or", "&"}
+# Words for the same job, compared as one.
+SAME_WORD = {"counsel": "attorney", "lawyer": "attorney", "solicitor": "attorney"}
+
+
+def _relevance_words(text):
+    return {SAME_WORD.get(t, t) for t in normalize_title(text).split()} - RELEVANCE_STOP
+
+
+def title_relevance(titles, resume_words):
+    """For each posting title, the share of its words that the resume also
+    uses, each word weighted by how rare it is among these titles. So for a
+    patent attorney's resume, "Patent Counsel" scores far above "Family Law
+    Attorney": every title has "attorney" or "counsel", few have "patent"."""
+    resume_words = {SAME_WORD.get(t, t) for t in resume_words}
+    tokens = [_relevance_words(t) for t in titles]
+    counts = {}
+    for tok in tokens:
+        for t in tok:
+            counts[t] = counts.get(t, 0) + 1
+    n = len(tokens)
+    weight = {t: math.log(1 + n / c) for t, c in counts.items()}
+    # Damping by the weight of a word every title has, so a title sharing a
+    # rare word ("Patent Counsel") beats one sharing only a common one ("Attorney").
+    damping = math.log(2)
+    out = []
+    for tok in tokens:
+        total = sum(weight[t] for t in tok)
+        shared = sum(weight[t] for t in tok if t in resume_words)
+        out.append(round(shared / (total + damping), 3) if total else 0.0)
+    return out
+
+
+# Ratings order postings only a little, so a closely related posting with a
+# gap still comes before an unrelated one that meets everything.
+RATING_BONUS = {"Strong match": 0.3, "Partial match": 0.15, "Stretch": 0.0}
+
+
 def rank_postings(postings, occupations, profile, top_occupations, states=None, metro=None,
                   metro_names=None, min_salary=None):
     best = occupations.head(top_occupations)
@@ -173,15 +214,15 @@ def rank_postings(postings, occupations, profile, top_occupations, states=None, 
     df["missing_skills"] = posting_tech.map(lambda t: ", ".join(sorted(t - resume_tech)))
     coverage = posting_tech.map(lambda t: len(t & resume_tech) / len(t) if t else 0.0)
     df["occupation"] = df["onet_code"].map(names)
-    df["match_score"] = (df["onet_code"].map(fit) + 0.5 * coverage).round(3)
+    df["title_relevance"] = title_relevance(df["title"], profile.get("words", set())) if len(df) else []
+    df["match_score"] = (df["onet_code"].map(fit) + 0.5 * coverage + df["title_relevance"]).round(3)
     education = dict(zip(best["onet_code"], best.get("typical_education", pd.Series(dtype=object))))
     checks = [posting_checks(row, posting_tech[i], profile, fit.get(row.onet_code),
                              education.get(row.onet_code))
               for i, row in zip(df.index, df.itertuples(index=False))]
     df = df.join(pd.DataFrame(checks, index=df.index))
-    df["rating_order"] = df["rating"].map(RATING_ORDER)
-    return df.sort_values(["rating_order", "match_score", "annual_salary"],
-                          ascending=[True, False, False]).drop(columns="rating_order")
+    df["rank_score"] = df["match_score"] + df["rating"].map(RATING_BONUS).fillna(0)
+    return df.sort_values(["rank_score", "annual_salary"], ascending=[False, False]).drop(columns="rank_score")
 
 
 RATINGS = ("Strong match", "Partial match", "Stretch")

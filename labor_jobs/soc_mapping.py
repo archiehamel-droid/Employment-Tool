@@ -114,7 +114,15 @@ TECH_ROLES = {
     "specialist": "15-1211.00",
     "tester": "15-1253.00",         # Software Quality Assurance Analysts and Testers
 }
-SEPARATORS = re.compile(r"\s+[-–—:|]\s+|[,|/]")
+# " - " and also a dash spaced on one side ("Patent Agent- Biologics"),
+# but not a hyphen inside a word ("Full-Stack").
+SEPARATORS = re.compile(r"\s+[-–—:|]\s*|\s*[-–—:]\s+|[,|/]")
+# Federal hiring authorities and pay grades ("Direct-Hire Authority",
+# "NF-04", "GS-12"), which say nothing about the occupation.
+FEDERAL_NOISE = re.compile(r"\bdirect[\s-]*hire\s+authority\b|\bdha\b|\b(?:gs|gm|wg|wl|ws|nf|na|nl)[\s-]?\d{1,2}\b")
+# "IP" in legal titles is intellectual property; elsewhere it's networking.
+LEGAL_IP = re.compile(r"\bip(?=\s+(?:counsel|attorney|lawyer|paralegal|litigat\w*|legal|docket\w*|specialist|"
+                      r"director|manager|associate|agent)\b)")
 
 
 def _singular(token):
@@ -131,6 +139,7 @@ def normalize_title(text):
         return ""
     text = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", text.lower())
     text = re.sub(r"\b(full|part)[\s-]*time\b", " ", text)
+    text = LEGAL_IP.sub("intellectual property", FEDERAL_NOISE.sub(" ", text))
     tokens = []
     for token in re.sub(r"[^a-z0-9+#]+", " ", text).split():
         tokens.extend(ABBREVIATIONS.get(token, token).split())

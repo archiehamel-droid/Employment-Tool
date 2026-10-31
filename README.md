@@ -274,6 +274,32 @@ ignored by git, so resumes kept there can't be committed by accident. Adzuna des
 are short snippets, so skill matches on Adzuna postings are sparse. The Kaggle
 LinkedIn postings have full descriptions.
 
+## Dashboard
+
+The Job Market Monitor dashboard shows a run's results in tabs: Overview, Occupations,
+Places, Outlook and Resume check. To build its data files from a run's output folder:
+
+```
+python -m labor_jobs.dashboard --results output/combined-2026-10 --out output/dashboard
+```
+
+This writes JSON files (one array of rows each) to `output/dashboard`. The summary
+tables feed the first four tabs. The Resume check tab gets these files:
+
+- postings split into one file per occupation group (`postings_11.json` to
+  `postings_55.json`), so the page only downloads the groups that fit a resume
+- occupation profiles (`fit_occupations.json`)
+- the job-title index (`title_index.json`)
+- technology names (`tech_aliases.json`)
+- college programs (`majors.json`)
+
+To refresh the dashboard, rebuild these files after a new run and replace its datasets
+with them.
+
+The Resume check tab runs the same matching as `--resume`, ported to JavaScript, all
+inside the reader's browser. A resume pasted or opened there (Word `.docx` or plain text)
+is never uploaded or saved. PDFs can't be read in the page; paste their text instead.
+
 ## Setup
 
 ```bash

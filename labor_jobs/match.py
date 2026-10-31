@@ -161,8 +161,16 @@ RELEVANCE_STOP = {"and", "of", "the", "for", "to", "in", "with", "at", "on", "or
 SAME_WORD = {"counsel": "attorney", "lawyer": "attorney", "solicitor": "attorney"}
 
 
+def _same_words(words):
+    """Words with synonyms merged; "intellectual property" counts as "ip"."""
+    words = {SAME_WORD.get(t, t) for t in words} - RELEVANCE_STOP
+    if {"intellectual", "property"} <= words:
+        words = (words - {"intellectual", "property"}) | {"ip"}
+    return words
+
+
 def _relevance_words(text):
-    return {SAME_WORD.get(t, t) for t in normalize_title(text).split()} - RELEVANCE_STOP
+    return _same_words(normalize_title(text).split())
 
 
 def title_relevance(titles, resume_words):
@@ -170,7 +178,7 @@ def title_relevance(titles, resume_words):
     uses, each word weighted by how rare it is among these titles. So for a
     patent attorney's resume, "Patent Counsel" scores far above "Family Law
     Attorney": every title has "attorney" or "counsel", few have "patent"."""
-    resume_words = {SAME_WORD.get(t, t) for t in resume_words}
+    resume_words = _same_words(resume_words) | ({"ip"} if {"intellectual", "property"} <= set(resume_words) else set())
     tokens = [_relevance_words(t) for t in titles]
     counts = {}
     for tok in tokens:

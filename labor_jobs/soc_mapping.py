@@ -146,6 +146,11 @@ AD_NOISE = re.compile(
     r"|\b\d{1,2}(?::\d{2})?\s*[ap]m?\s*-\s*\d{1,2}(?::\d{2})?\s*[ap]m?\b"
     r"|\bsign[\s-]*on\s+bonus\b.*|\bnew\s+grads?\s+welcome\b|\bbonus\s+available\b|\bnon[\s-]*union\b"
     r"|\b(?:summer|fall|spring|winter)\s+(?=intern)|\bdirect\s+hiring\s+event\b.*")
+# "Contract" and "staff" are usually dropped ("Contract RN", "Staff
+# Accountant") but name the job in "Contract Specialist" and "Staff Assistant".
+KEEP_CONTRACT = re.compile(r"\bcontract\s+(?=(?:specialist|administrator|manager|analyst|officer|negotiator|"
+                           r"coordinator)\b)")
+KEEP_STAFF = re.compile(r"\bstaff\s+(assistant|administrator)\b")
 # "IP" in legal titles is intellectual property; elsewhere it's networking.
 LEGAL_IP = re.compile(r"\bip(?=\s+(?:counsel|attorney|lawyer|paralegal|litigat\w*|legal|docket\w*|specialist|"
                       r"director|manager|associate|agent)\b)")
@@ -166,6 +171,7 @@ def normalize_title(text):
     text = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", text.lower())
     text = re.sub(r"\b(full|part)[\s-]*time\b", " ", text)
     text = LEGAL_IP.sub("intellectual property", FEDERAL_NOISE.sub(" ", AD_NOISE.sub(" ", text)))
+    text = KEEP_STAFF.sub(r"staff\1", KEEP_CONTRACT.sub("contracting ", text))
     tokens = []
     for token in re.sub(r"[^a-z0-9+#]+", " ", text).split():
         tokens.extend(ABBREVIATIONS.get(token, token).split())

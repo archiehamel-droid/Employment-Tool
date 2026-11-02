@@ -94,6 +94,6 @@ class TextModel:
         for code, vec in self.vectors.items():
             if codes is not None and code not in codes:
                 continue
-            terms = " ".join(f"{t}:{w * self.idf[t]:.4g}" for t, w in vec.items())
+            terms = " ".join(f"{t}:{w * self.idf[t]:.3g}" for t, w in vec.items())
             rows.append({"o": code, "v": terms})
         return rows

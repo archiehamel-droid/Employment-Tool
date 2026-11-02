@@ -6,8 +6,9 @@ main run's output:
 Each file is a JSON array of rows. Summary tables feed the Overview,
 Occupations, Places and Outlook tabs; the Resume check tab, which matches a
 resume in the reader's browser, gets the postings split by occupation group
-(so a page downloads only the groups that fit), occupation profiles, the
-job-title index, technology names and college programs.
+(so a page downloads only the groups that fit), occupation profiles, each
+occupation's task wording (for comparing a resume's duties), the job-title
+index, technology names and college programs.
 """
 
 import argparse
@@ -18,7 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, jolts, majors, skills
+from . import bls, h1b, jolts, majors, occupation_text, skills
 from .matching import build_matcher
 from .soc_mapping import load_onet_titles, load_title_overrides
 
@@ -144,6 +145,9 @@ def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_y
     occ["edu"] = occ.get("typical_education").map(edu) if "typical_education" in occ else None
     _save(out, "fit_occupations", _clean(occ[["onet_code", "soc_code", "onet_title", "postings", "techs", "edu",
                                               "typical_education"]].rename(columns={"onet_title": "title"})))
+
+    model = occupation_text.TextModel(occupation_text.occupation_documents(onet_version, cache, user_agent))
+    _save(out, "occupation_text", model.export_rows(set(occ["onet_code"])))
 
     oews_national = bls.read_oews(bls.oews_file(cache, 2024, "nat", user_agent))
     employer = h1b.reference_titles(h1b.read_h1b(h1b.h1b_files(cache, h1b_year, user_agent)))

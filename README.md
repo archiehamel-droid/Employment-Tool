@@ -232,10 +232,24 @@ It writes `matches.md`, `matching_occupations.csv` and `matching_postings.csv` t
 - **Resume** (PDF, Word or text): the tool reads job titles the person has held (using the
   same title matching as postings), the technologies they list (O*NET's hot technologies),
   their highest degree and their major.
-- **Fit score** (0–1) per occupation: held titles (weight 3), the major (2) and shared
-  technologies (2), counting only the signals the person gave. Occupations whose BLS
-  typical entry education is higher than the person's degree count half. `--education`
-  sets the degree when there's no resume; it defaults to a bachelor's.
+- **Fit score** (0–1) per occupation, from four signals, counting only the ones the person
+  gave:
+  - *title* (weight 3): a job title on the resume names the occupation; the first (latest)
+    job counts fully, earlier ones a little less.
+  - *duties* (3): the resume's wording against the occupation's O*NET description, task
+    statements and alternate titles, by TF-IDF cosine, scaled so the closest occupation
+    is 1. This finds the occupation when no title is recognized ("Associate, Patent
+    Prosecution Group" reads like a lawyer; "Revenue Cycle Specialist" like a medical coder).
+  - *major* (1): the major's program leads to the occupation, counting less when the
+    program leads to more than six.
+  - *skills* (1.5): technologies the occupation's postings ask for, rare ones counting more
+    than ones nearly every occupation lists, like Excel.
+
+  Occupations that usually need a higher degree than the person's count half (a
+  certificate such as a CDL isn't a degree, so it doesn't count against). `--education`
+  sets the degree when there's no resume; it defaults to a bachelor's. On 21 fictional
+  resumes across fields, the top occupation is the expected one for all 21, and about 70%
+  of the top five are in the expected field.
 - **Postings** in the best-fitting occupations are ranked by fit plus how many of the
   posting's technologies the resume covers, and can be filtered with `--state`, `--metro`
   and `--min-salary`. The occupation table also lists technologies common in that

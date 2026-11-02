@@ -222,6 +222,11 @@ LIST_LINE = re.compile(r"(?i)^\W*(skills|tools|technologies|technical|software|p
                        r"programs|platforms)\b[^:]{0,30}:|[,;|•·].*[,;|•·]")
 
 
+# A line with a year or "present" is a job line ("Electrician | Spark Electric |
+# 2018 - Present"), whose employer names aren't skills.
+DATED_LINE = re.compile(r"(?i)\b(?:19|20)\d{2}\b|\bpresent\b")
+
+
 def resume_aliases(technologies):
     """Rows of (alias, name, mode) for reading technologies on a resume. mode
     is "i" (any case), "c" (as written or in capitals) or "l" (as written,
@@ -268,7 +273,7 @@ def resume_technologies(text, rows):
     if listed:
         pattern = re.compile(edge.format(_alternation(listed)))
         for line in text.splitlines():
-            if LIST_LINE.search(line):
+            if LIST_LINE.search(line) and not DATED_LINE.search(line):
                 found.update(listed[m] for m in pattern.findall(line))
     return sorted(found)
 

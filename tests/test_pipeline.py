@@ -667,8 +667,12 @@ def test_resume_and_major_matching(tmp_path):
     major_socs = set(major_matcher.occupations_for(["27.0501"]))
     occ = match.score_occupations(detailed, profile, major_socs).set_index("onet_code")
     assert occ.index[0] == "15-2051.00"  # held title + major + skills
-    # Title 1, major 1, skills 2 of 5 resume technologies: (3 + 2 + 2 * 0.4) / 7.
-    assert occ.loc["15-2051.00", "fit_score"] == round((3 + 2 + 2 * 0.4) / 7, 3)
+    # Title 1, major 1 (its program leads to 2 occupations), skills weighted by
+    # rarity: Python is in 3 of 4 occupations' lists, the rest in at most 1.
+    import math
+    rare, common = math.log(4), math.log(4 / 3)
+    skills = (rare + common) / (4 * rare + common)
+    assert occ.loc["15-2051.00", "fit_score"] == round((3 + 1 + 1.5 * skills) / 5.5, 3)
     assert "Spark" in occ.loc["15-2051.00", "skills_to_add"]
     # Statisticians fit the major but usually need a master's: counted half.
     assert "usually needs: Master's degree" in occ.loc["15-2041.00", "why"]
@@ -947,3 +951,25 @@ def test_ad_noise_and_contained_titles():
     assert pd.isna(out["onet_code"].iloc[3])
     assert normalize_title("Process Lead, Allston, #1178") == "process allston"
     assert normalize_title("Quantitative Trader Intern - Summer 2027") == "quantitative trader intern"
+
+
+def test_duties_find_the_occupation_without_a_known_title():
+    from labor_jobs import match
+    from labor_jobs.occupation_text import TextModel, tokens
+    assert tokens("Prosecuting patents")[:2] == ["prosecut", "patent"]
+    model = TextModel({
+        "23-1011.00": "Lawyers. Represent clients. Prepare and prosecute patent applications. Draft legal opinions.",
+        "29-2072.00": "Medical Records Specialists. Assign ICD-10 and CPT codes to patient encounters. Submit claims.",
+        "47-2111.00": "Electricians. Install conduit, wiring and panels. Read blueprints.",
+    })
+    text = "Associate, Patent Prosecution Group\nDraft and prosecute patent applications; respond to office actions"
+    sims = model.similarity(text)
+    assert max(sims, key=sims.get) == "23-1011.00"
+    detailed = pd.DataFrame({"onet_code": list(sims), "soc_code": [c[:7] for c in sims],
+                             "onet_title": ["Lawyers", "Medical Records Specialists", "Electricians"],
+                             "postings": [3, 3, 3], "posting_technologies": [None] * 3,
+                             "onet_hot_technologies": [None] * 3, "typical_education": [None] * 3})
+    profile = {"titles": {}, "technologies": [], "education_level": 5, "text_similarity": sims}
+    occ = match.score_occupations(detailed, profile, None)
+    assert occ["onet_code"].iloc[0] == "23-1011.00" and occ["fit_score"].iloc[0] == 1.0
+    assert "duties match its tasks" in occ["why"].iloc[0]

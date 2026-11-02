@@ -42,12 +42,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, majors, requirements, skills
+from . import bls, h1b, majors, occupation_text, requirements, skills
 from .matching import build_matcher
 from .report import table
 from .soc_mapping import load_onet_titles, load_title_overrides, normalize_title
 
-WEIGHTS = {"title": 3.0, "major": 2.0, "skills": 2.0}
+WEIGHTS = {"title": 3.0, "duties": 3.0, "major": 1.0, "skills": 1.5}
+# A major leading to this many occupations or fewer gives full credit to each.
+MAJOR_SPECIFIC = 6
 CONFIDENT_METHODS = {"exact", "override", "employer", "technology", "keyword", "partial"}
 EDUCATION_CHOICES = {"none": 0, "associate": 2, "bachelor": 3, "master": 4, "doctoral": 5}
 
@@ -66,6 +68,13 @@ def read_document(path):
     return path.read_text(errors="ignore")
 
 
+# Phrases ending like this name an employer or school, not a job
+# ("Lincoln High School", "Mercy Hospital", "Acme Retail Co.").
+ORGANIZATION_END = re.compile(
+    r"(?i)\b(?:school|university|college|academy|institute|hospital|clinic|center|centre|inc|llc|llp|ltd|corp|"
+    r"corporation|company|co|group|bank|agency|department|associates|partners|foundation|church|district)\.?$")
+
+
 def title_candidates(text, technologies=()):
     """Short phrases that could be job titles: lines and parts of lines
     split at separators, 1-7 words, without long numbers (dates, phones).
@@ -81,13 +90,15 @@ def title_candidates(text, technologies=()):
             words = part.split()
             if 1 <= len(words) <= 7 and re.search(r"[A-Za-z]{3}", part) \
                     and not re.search(r"\d{3,}|@|www\.|https?:", part) \
-                    and normalize_title(part) not in tech:
+                    and normalize_title(part) not in tech \
+                    and not ORGANIZATION_END.search(part):
                 out.append(part)
     return list(dict.fromkeys(out))
 
 
-def resume_profile(text, matcher, technologies, major_matcher):
-    """What the resume says, as plain data (no resume text kept)."""
+def resume_profile(text, matcher, technologies, major_matcher, text_model=None):
+    """What the resume says, as plain data (no resume text kept). With a
+    text_model, also how closely its wording matches each occupation's tasks."""
     aliases = skills.resume_aliases(technologies)
     candidates = pd.Series(title_candidates(text, [r["alias"] for r in aliases]), dtype=object)
     titles = {}
@@ -102,7 +113,8 @@ def resume_profile(text, matcher, technologies, major_matcher):
             "majors": majors.majors_in_text(text), "education_level": level,
             "education": label, "years": requirements.resume_years(text),
             # Words of the resume, for comparing posting titles; not written to any output.
-            "words": set(normalize_title(text).split())}
+            "words": set(normalize_title(text).split()),
+            "text_similarity": text_model.similarity(text) if text_model else {}}
 
 
 def _tech_names(value):
@@ -113,43 +125,71 @@ def _tech_names(value):
 
 
 def score_occupations(detailed, profile, major_socs):
-    """Fit score 0-1 per occupation in the results, with the reasons."""
-    held = profile["titles"]
-    held_socs = {code[:7] for code in held}
+    """Fit score 0-1 per occupation in the results, with the reasons. Four signals:
+    title    a job title on the resume names the occupation; the first (latest)
+             counts fully, earlier ones a little less
+    duties   the resume's wording against the occupation's O*NET tasks, scaled
+             so the closest occupation is 1
+    major    the major's college program leads to it, counting less when the
+             program leads to many occupations
+    skills   technologies the occupation's postings ask for, rare ones counting
+             more than ones nearly every occupation lists (Excel)
+    Occupations usually needing a higher degree than the resume shows count half."""
+    held = list(profile["titles"].items())
+    recency = {code: max(0.6, 1 - 0.2 * i) for i, (code, _) in enumerate(held)}
+    held_socs = {}
+    for code, r in recency.items():
+        held_socs[code[:7]] = max(held_socs.get(code[:7], 0.0), r)
+    similarity = profile.get("text_similarity") or {}
+    best_text = max((similarity.get(c, 0.0) for c in detailed["onet_code"]), default=0.0)
+    occ_tech = {occ.onet_code: _tech_names(getattr(occ, "posting_technologies", None))
+                or _tech_names(getattr(occ, "onet_hot_technologies", None))
+                for occ in detailed.itertuples(index=False)}
+    tech_df = {}
+    for techs in occ_tech.values():
+        for t in techs:
+            tech_df[t] = tech_df.get(t, 0) + 1
     resume_tech = set(profile["technologies"])
+    tech_weight = {t: math.log(len(occ_tech) / tech_df.get(t, 1)) for t in resume_tech}
+    tech_total = sum(sorted(tech_weight.values(), reverse=True)[:5]) or 1.0
+    major_credit = min(1.0, math.sqrt(MAJOR_SPECIFIC / len(major_socs))) if major_socs else 0.0
     # Every signal the person provided counts for every occupation (as 0
     # where it doesn't match), so occupations aren't scored on fewer signals.
-    available = [k for k, present in (("title", bool(held)), ("major", major_socs is not None),
-                                      ("skills", bool(resume_tech))) if present]
+    available = [k for k, present in (("title", bool(held)), ("duties", best_text > 0),
+                                      ("major", bool(major_socs)), ("skills", bool(resume_tech))) if present]
+    if not available:
+        return detailed.iloc[0:0].assign(fit_score=[], why=[], skills_to_add=[])
     rows = []
     for occ in detailed.itertuples(index=False):
         signals, why = dict.fromkeys(available, 0.0), []
-        if occ.onet_code in held:
-            signals["title"] = 1.0
-            why.append(f"held title: {held[occ.onet_code]}")
+        if occ.onet_code in recency:
+            signals["title"] = recency[occ.onet_code]
+            why.append(f"held title: {profile['titles'][occ.onet_code]}")
         elif occ.soc_code in held_socs:
-            signals["title"] = 0.6
-            why.append("held a title in the same occupation group")
-        if major_socs is not None and occ.soc_code in major_socs:
-            signals["major"] = 1.0
+            signals["title"] = 0.6 * held_socs[occ.soc_code]
+            why.append("held a title in the same occupation")
+        if "duties" in available:
+            signals["duties"] = min(1.0, similarity.get(occ.onet_code, 0.0) / best_text)
+            if signals["duties"] >= 0.5:
+                why.append("duties match its tasks")
+        if major_socs and occ.soc_code in major_socs:
+            signals["major"] = major_credit
             why.append("fits the major")
-        occ_tech = _tech_names(getattr(occ, "posting_technologies", None)) or \
-            _tech_names(getattr(occ, "onet_hot_technologies", None))
         if resume_tech:
-            overlap = sorted(resume_tech & occ_tech)
-            signals["skills"] = min(1.0, len(overlap) / min(len(resume_tech), 5))
+            overlap = sorted(resume_tech & occ_tech[occ.onet_code])
+            signals["skills"] = min(1.0, sum(tech_weight[t] for t in overlap) / tech_total)
             if overlap:
                 why.append("skills: " + ", ".join(overlap[:6]))
-        if not available:
-            continue
         fit = sum(WEIGHTS[k] * signals[k] for k in available) / sum(WEIGHTS[k] for k in available)
         needs = majors.BLS_EDUCATION.get(getattr(occ, "typical_education", None))
-        if needs is not None and needs > profile["education_level"]:
+        # Only a degree: certificates and training (a CDL, an apprenticeship)
+        # don't show up as an education level on a resume.
+        if needs is not None and needs >= 2 and needs > profile["education_level"]:
             fit *= 0.5
             why.append(f"usually needs: {occ.typical_education}")
-        missing = [t for t in (_tech_names(getattr(occ, "posting_technologies", None)) - resume_tech)]
+        missing = sorted(_tech_names(getattr(occ, "posting_technologies", None)) - resume_tech)
         rows.append({"onet_code": occ.onet_code, "fit_score": round(fit, 3),
-                     "why": "; ".join(why), "skills_to_add": ", ".join(sorted(missing)[:6])})
+                     "why": "; ".join(why), "skills_to_add": ", ".join(missing[:6])})
     scores = pd.DataFrame(rows, columns=["onet_code", "fit_score", "why", "skills_to_add"])
     out = detailed.merge(scores, on="onet_code")
     out = out[out["fit_score"] > 0]
@@ -424,7 +464,9 @@ def main(argv=None):
                                 load_onet_titles(args.onet_version, args.cache, user_agent, args.onet_dir),
                                 profiles, technologies, load_title_overrides(),
                                 employer_titles=employer_titles)
-        profile = resume_profile(read_document(args.resume), matcher, technologies, major_matcher)
+        text_model = occupation_text.TextModel(occupation_text.occupation_documents(
+            args.onet_version, args.cache, user_agent, args.onet_dir))
+        profile = resume_profile(read_document(args.resume), matcher, technologies, major_matcher, text_model)
         profile["from_resume"] = True
     if args.education:
         profile["education_level"] = EDUCATION_CHOICES[args.education]

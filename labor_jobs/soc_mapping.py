@@ -172,6 +172,7 @@ def normalize_title(text):
     text = re.sub(r"\b(full|part)[\s-]*time\b", " ", text)
     text = LEGAL_IP.sub("intellectual property", FEDERAL_NOISE.sub(" ", AD_NOISE.sub(" ", text)))
     text = KEEP_STAFF.sub(r"staff\1", KEEP_CONTRACT.sub("contracting ", text))
+    text = re.sub(r"\bco-?op\b", "intern", text)
     tokens = []
     for token in re.sub(r"[^a-z0-9+#]+", " ", text).split():
         tokens.extend(ABBREVIATIONS.get(token, token).split())

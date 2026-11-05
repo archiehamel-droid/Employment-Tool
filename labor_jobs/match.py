@@ -42,12 +42,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, majors, occupation_text, requirements, skills
+from . import bls, h1b, majors, occupation_text, personality, requirements, skills
 from .matching import build_matcher
 from .report import table
 from .soc_mapping import load_onet_titles, load_title_overrides, normalize_title
 
-WEIGHTS = {"title": 3.0, "duties": 3.0, "major": 1.0, "skills": 1.5}
+WEIGHTS = {"title": 3.0, "duties": 3.0, "major": 1.0, "skills": 1.5, **personality.WEIGHTS}
 # A major leading to this many occupations or fewer gives full credit to each.
 MAJOR_SPECIFIC = 6
 CONFIDENT_METHODS = {"exact", "override", "employer", "technology", "keyword", "partial"}
@@ -134,6 +134,8 @@ def score_occupations(detailed, profile, major_socs):
              program leads to many occupations
     skills   technologies the occupation's postings ask for, rare ones counting
              more than ones nearly every occupation lists (Excel)
+    and, from personality.trait_signals when test results are given, interests
+    (Holland/RIASEC), work styles (Big Five) and, weakly, Myers-Briggs.
     Occupations usually needing a higher degree than the resume shows count half."""
     held = list(profile["titles"].items())
     recency = {code: max(0.6, 1 - 0.2 * i) for i, (code, _) in enumerate(held)}
@@ -155,8 +157,11 @@ def score_occupations(detailed, profile, major_socs):
     major_credit = min(1.0, math.sqrt(MAJOR_SPECIFIC / len(major_socs))) if major_socs else 0.0
     # Every signal the person provided counts for every occupation (as 0
     # where it doesn't match), so occupations aren't scored on fewer signals.
+    traits = profile.get("traits") or {}
+    trait_keys = sorted({k for t in traits.values() for k in t["signals"]})
     available = [k for k, present in (("title", bool(held)), ("duties", best_text > 0),
                                       ("major", bool(major_socs)), ("skills", bool(resume_tech))) if present]
+    available += trait_keys
     if not available:
         return detailed.iloc[0:0].assign(fit_score=[], why=[], skills_to_add=[])
     rows = []
@@ -180,6 +185,13 @@ def score_occupations(detailed, profile, major_socs):
             signals["skills"] = min(1.0, sum(tech_weight[t] for t in overlap) / tech_total)
             if overlap:
                 why.append("skills: " + ", ".join(overlap[:6]))
+        trait = traits.get(occ.onet_code, {"signals": {}})
+        for k in trait_keys:
+            signals[k] = trait["signals"].get(k, 0.0)
+        if trait["signals"].get("interests", 0) >= 0.7 or trait["signals"].get("mbti", 0) >= 0.7:
+            why.append(f"interests match ({trait['holland']})")
+        if trait["signals"].get("styles", 0) >= 0.7:
+            why.append("personality suits its work styles")
         fit = sum(WEIGHTS[k] * signals[k] for k in available) / sum(WEIGHTS[k] for k in available)
         needs = majors.BLS_EDUCATION.get(getattr(occ, "typical_education", None))
         # Only a degree: certificates and training (a CDL, an apprenticeship)
@@ -189,8 +201,10 @@ def score_occupations(detailed, profile, major_socs):
             why.append(f"usually needs: {occ.typical_education}")
         missing = sorted(_tech_names(getattr(occ, "posting_technologies", None)) - resume_tech)
         rows.append({"onet_code": occ.onet_code, "fit_score": round(fit, 3),
-                     "why": "; ".join(why), "skills_to_add": ", ".join(missing[:6])})
-    scores = pd.DataFrame(rows, columns=["onet_code", "fit_score", "why", "skills_to_add"])
+                     "why": "; ".join(why), "skills_to_add": ", ".join(missing[:6]),
+                     "holland_code": trait.get("holland"), "reasoning_demand": trait.get("reasoning")})
+    scores = pd.DataFrame(rows, columns=["onet_code", "fit_score", "why", "skills_to_add", "holland_code",
+                                         "reasoning_demand"])
     out = detailed.merge(scores, on="onet_code")
     out = out[out["fit_score"] > 0]
     return out.sort_values(["fit_score", "postings"], ascending=False)
@@ -369,6 +383,23 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
                   "",
                   "The resume was read in memory only; nothing from it is saved beyond this list.",
                   ""]
+    tests = profile.get("tests")
+    if tests:
+        lines += ["## From the test results"]
+        if tests.get("riasec"):
+            lines.append(f"- Holland interests: {personality.holland_code(tests['riasec'])} ("
+                         + ", ".join(f"{personality.RIASEC_NAMES[k]} {v:g}" for k, v in tests["riasec"].items()) + ")")
+        if tests.get("big_five"):
+            big5 = ", ".join(f"{personality.BIG_FIVE_NAMES[k]} {v:.0%}" for k, v in tests["big_five"].items())
+            lines.append(f"- Big Five: {big5}")
+        if tests.get("mbti"):
+            note = "ignored, since interest scores were given" if tests.get("riasec") else \
+                "turned into rough interests and counted lightly: Myers-Briggs types predict job fit poorly"
+            lines.append(f"- Myers-Briggs: {tests['mbti']} ({note})")
+        if tests.get("iq"):
+            lines.append(f"- IQ: {tests['iq']} ({personality.iq_band(tests['iq'])}). Shown as each "
+                         "occupation's reasoning demand; it doesn't change the ranking.")
+        lines.append("")
     if major_hits:
         lines += ["## Major", f"\"{major_text}\" was matched to: " +
                   "; ".join(f"{title} (CIP {code})" for code, title, _ in major_hits), ""]
@@ -377,10 +408,13 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
                   "onet_title": "Occupation", "fit_score": "Fit", "postings": "Postings",
                   "median_posted_salary": "Posted median $", "bls_median_wage": "BLS median $",
                   "proj_growth_pct": "Growth % (10 yr)", "typical_education": "Typical education",
-                  "why": "Why", "skills_to_add": "Skills in postings not on resume"}),
+                  "why": "Why", "skills_to_add": "Skills in postings not on resume",
+                  **({"holland_code": "Holland code", "reasoning_demand": "Reasoning demand"} if tests else {})}),
               "",
-              "Fit combines held job titles, the major's usual occupations and shared "
-              "technologies (0 to 1). Occupations that usually need a higher degree count half.",
+              "Fit (0 to 1) weighs held job titles, how closely described duties match each "
+              "occupation's O*NET tasks, the major, and technologies, plus interests and "
+              "personality when test results are given. Occupations that usually need a higher "
+              "degree count half.",
               "",
               "## Postings checked against the resume",
               "Each posting's stated requirements against the resume. This is a checklist, "
@@ -411,6 +445,31 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
     return "\n".join(lines)
 
 
+def _pairs(text):
+    """"O=70, C=85" -> {"O": 70.0, "C": 85.0}."""
+    return {k.strip().upper(): float(v) for k, v in re.findall(r"([A-Za-z])\s*[=:]\s*(\d+(?:\.\d+)?)", text or "")}
+
+
+def read_tests(args):
+    """Test results from a report file and/or the command line (which wins)."""
+    tests = personality.parse_results(read_document(args.tests)) if args.tests else \
+        {"riasec": None, "big_five": None, "mbti": None, "iq": None}
+    if args.riasec:
+        pairs = _pairs(args.riasec)
+        tests["riasec"] = {k: pairs.get(k, 0.0) for k in personality.RIASEC} if len(pairs) >= 3 \
+            else personality.riasec_from_code(args.riasec)
+    if args.big_five:
+        pairs = _pairs(args.big_five)
+        if "N" in pairs:
+            pairs["_neuroticism"] = pairs.pop("N")
+        tests["big_five"] = personality.normalize_big_five(pairs)
+    if args.mbti:
+        tests["mbti"] = args.mbti.strip().upper()[:4]
+    if args.iq:
+        tests["iq"] = args.iq
+    return tests
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="labor_jobs.match",
                                 description="Find occupations and postings that fit a resume or major.")
@@ -422,6 +481,14 @@ def main(argv=None):
     p.add_argument("--state", nargs="+", help="only postings in these states, e.g. TX CA")
     p.add_argument("--metro", help='only postings in metro areas whose name contains this, e.g. "Austin"')
     p.add_argument("--min-salary", type=float, help="only postings advertising at least this much a year")
+    p.add_argument("--tests", help="a personality or interest test report (.pdf, .docx or .txt) to read "
+                                   "RIASEC, Big Five, Myers-Briggs and IQ results from")
+    p.add_argument("--riasec", help='Holland interests: a code like "SIA" or scores like '
+                                    '"R=12,I=30,A=8,S=35,E=20,C=15"')
+    p.add_argument("--big-five", help='Big Five percentiles, e.g. "O=70,C=85,E=30,A=60,N=40" (N = neuroticism)')
+    p.add_argument("--mbti", help="Myers-Briggs type, e.g. INTJ (weak evidence; used lightly)")
+    p.add_argument("--iq", type=int, help="IQ or cognitive score (shown against each job's reasoning demand; "
+                                          "never changes the ranking)")
     p.add_argument("--top", type=int, default=15, help="occupations to show (default 15)")
     p.add_argument("--out", help="folder for the match files (default: <results>/matches)")
     p.add_argument("--cache", default="data/cache")
@@ -432,8 +499,8 @@ def main(argv=None):
     p.add_argument("--skip-h1b", action="store_true", help="don't use H-1B job titles for matching")
     p.add_argument("--contact-email", default=os.environ.get("BLS_CONTACT_EMAIL"))
     args = p.parse_args(argv)
-    if not (args.resume or args.major):
-        p.error("give --resume, --major or both")
+    if not (args.resume or args.major or args.tests or args.riasec or args.big_five or args.mbti):
+        p.error("give --resume, --major, test results (--tests, --riasec, --big-five, --mbti) or a mix")
 
     results = Path(args.results)
     out = Path(args.out) if args.out else results / "matches"
@@ -480,6 +547,11 @@ def main(argv=None):
     if major_text and not major_hits:
         print(f"Couldn't match the major \"{major_text}\" to a college program; ignoring it.")
 
+    tests = read_tests(args)
+    if any(tests.values()):
+        profile["tests"] = tests
+        profile["traits"] = personality.trait_signals(
+            tests, personality.occupation_traits(args.onet_version, args.cache, user_agent, args.onet_dir))
     occupations = score_occupations(detailed, profile, major_socs)
     ranked = rank_postings(postings, occupations, profile, args.top, args.state, args.metro,
                            metro_names, args.min_salary)

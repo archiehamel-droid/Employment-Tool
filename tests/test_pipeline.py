@@ -973,3 +973,39 @@ def test_duties_find_the_occupation_without_a_known_title():
     occ = match.score_occupations(detailed, profile, None)
     assert occ["onet_code"].iloc[0] == "23-1011.00" and occ["fit_score"].iloc[0] == 1.0
     assert "duties match its tasks" in occ["why"].iloc[0]
+
+
+def test_reading_personality_and_interest_results():
+    from labor_jobs import personality as P
+    interest_report = """O*NET Interest Profiler results
+Realistic: 12   Investigative: 34   Artistic: 9
+Social: 38   Enterprising: 15   Conventional: 22"""
+    r = P.parse_results(interest_report)["riasec"]
+    assert P.holland_code(r) == "SIC" and r["S"] == 38
+    assert P.holland_code(P.parse_results("Your Holland Code is: AES")["riasec"]) == "AES"
+    big5 = P.parse_results("Openness to Experience 72%\nConscientiousness 88th percentile\n"
+                           "Extraversion 25\nAgreeableness 60\nNeuroticism 30")["big_five"]
+    assert big5 == {"O": 0.72, "C": 0.88, "E": 0.25, "A": 0.6, "N": 0.7}  # neuroticism -> stability
+    assert P.parse_results("Openness 4.5\nConscientiousness 3\nExtraversion 1")["big_five"]["O"] == 0.875  # 1-5 scale
+    found = P.parse_results("Your personality type: INFJ-T (Advocate)\nFull Scale IQ: 118")
+    assert found["mbti"] == "INFJ" and found["iq"] == 118
+    assert P.parse_results("Team meeting notes")["riasec"] is None
+    assert P.holland_code(P.mbti_to_riasec("ESTJ")) in {"CER", "ECR", "CRE", "ERC"}
+    assert P.iq_band(118) == "above average"
+
+
+def test_interests_rank_matching_occupations_first():
+    from labor_jobs import personality as P
+    traits = pd.DataFrame({
+        "onet_code": ["17-2141.00", "25-2021.00", "41-3091.00"],
+        "R": [6.5, 1.5, 1.5], "I": [6.0, 3.0, 2.0], "A": [3.0, 3.5, 2.5],
+        "S": [2.0, 6.8, 4.0], "E": [3.0, 4.0, 6.5], "C": [4.5, 3.0, 4.5],
+        "b5_O": [0.8, 0.5, 0.3], "b5_C": [0.9, 0.6, 0.4], "b5_E": [0.2, 0.7, 0.9],
+        "b5_A": [0.3, 0.9, 0.5], "b5_N": [0.5, 0.7, 0.6], "reasoning": [4.5, 3.6, 3.0]})
+    sig = P.trait_signals({"riasec": P.riasec_from_code("RIC"), "big_five": {"O": .8, "C": .9, "E": .2}}, traits)
+    assert max(sig, key=lambda c: sig[c]["signals"]["interests"]) == "17-2141.00"
+    assert sig["17-2141.00"]["signals"]["styles"] == 1.0 and sig["17-2141.00"]["holland"] == "RIC"
+    assert sig["17-2141.00"]["reasoning"] == "High"  # above 2 of the 3 occupations
+    # Myers-Briggs is used only without real interest scores.
+    assert "mbti" in P.trait_signals({"mbti": "ENFJ"}, traits)["25-2021.00"]["signals"]
+    assert "mbti" not in P.trait_signals({"mbti": "ENFJ", "riasec": P.riasec_from_code("S")}, traits)["25-2021.00"]["signals"]

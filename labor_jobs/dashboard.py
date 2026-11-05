@@ -7,7 +7,8 @@ Each file is a JSON array of rows. Summary tables feed the Overview,
 Occupations, Places and Outlook tabs; the Resume check tab, which matches a
 resume in the reader's browser, gets the postings split by occupation group
 (so a page downloads only the groups that fit), occupation profiles, each
-occupation's task wording (for comparing a resume's duties), the job-title
+occupation's task wording (for comparing a resume's duties) and its
+interest, work-style and reasoning profile (for test results), the job-title
 index, technology names and college programs.
 """
 
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, jolts, majors, occupation_text, skills
+from . import bls, h1b, jolts, majors, occupation_text, personality, skills
 from .matching import build_matcher
 from .soc_mapping import load_onet_titles, load_title_overrides
 
@@ -146,6 +147,15 @@ def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_y
     _save(out, "fit_occupations", _clean(occ[["onet_code", "soc_code", "onet_title", "postings", "techs", "edu",
                                               "typical_education"]].rename(columns={"onet_title": "title"})))
 
+    traits = personality.occupation_traits(onet_version, cache, user_agent)
+    codes = set(occ["onet_code"])
+    _save(out, "occupation_traits", [
+        {"o": r.onet_code, **{k.lower(): None if pd.isna(getattr(r, k)) else round(getattr(r, k), 2)
+                              for k in personality.RIASEC},
+         **{f"b{k.lower()}": None if pd.isna(getattr(r, f"b5_{k}")) else round(getattr(r, f"b5_{k}"), 3)
+            for k in personality.BIG_FIVE},
+         "rz": r.reasoning_band if isinstance(r.reasoning_band, str) else None}
+        for r in traits.itertuples(index=False) if r.onet_code in codes])
     model = occupation_text.TextModel(occupation_text.occupation_documents(onet_version, cache, user_agent))
     _save(out, "occupation_text", model.export_rows(set(occ["onet_code"])))
 

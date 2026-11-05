@@ -550,8 +550,8 @@ def main(argv=None):
     tests = read_tests(args)
     if any(tests.values()):
         profile["tests"] = tests
-        profile["traits"] = personality.trait_signals(
-            tests, personality.occupation_traits(args.onet_version, args.cache, user_agent, args.onet_dir))
+        traits = personality.occupation_traits(args.onet_version, args.cache, user_agent, args.onet_dir)
+        profile["traits"] = personality.trait_signals(tests, traits[traits["onet_code"].isin(detailed["onet_code"])])
     occupations = score_occupations(detailed, profile, major_socs)
     ranked = rank_postings(postings, occupations, profile, args.top, args.state, args.metro,
                            metro_names, args.min_salary)

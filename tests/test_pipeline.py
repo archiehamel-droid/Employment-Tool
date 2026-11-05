@@ -1002,6 +1002,7 @@ def test_interests_rank_matching_occupations_first():
         "S": [2.0, 6.8, 4.0], "E": [3.0, 4.0, 6.5], "C": [4.5, 3.0, 4.5],
         "b5_O": [0.8, 0.5, 0.3], "b5_C": [0.9, 0.6, 0.4], "b5_E": [0.2, 0.7, 0.9],
         "b5_A": [0.3, 0.9, 0.5], "b5_N": [0.5, 0.7, 0.6], "reasoning": [4.5, 3.6, 3.0]})
+    traits["reasoning_band"] = [P.reasoning_band(v, traits["reasoning"]) for v in traits["reasoning"]]
     sig = P.trait_signals({"riasec": P.riasec_from_code("RIC"), "big_five": {"O": .8, "C": .9, "E": .2}}, traits)
     assert max(sig, key=lambda c: sig[c]["signals"]["interests"]) == "17-2141.00"
     assert sig["17-2141.00"]["signals"]["styles"] == 1.0 and sig["17-2141.00"]["holland"] == "RIC"

@@ -255,6 +255,36 @@ It writes `matches.md`, `matching_occupations.csv` and `matching_postings.csv` t
   and `--min-salary`. The occupation table also lists technologies common in that
   occupation's postings that the resume doesn't mention.
 
+### Interest and personality tests
+
+Test results can add to a resume, or stand in for one:
+
+```bash
+python -m labor_jobs.match --tests results.pdf --results output/combined-2026-10
+python -m labor_jobs.match --resume jane.docx --riasec SIA --big-five "O=70,C=85,E=30,A=60,N=40"
+python -m labor_jobs.match --mbti INTJ --iq 118 --results output/combined-2026-10
+```
+
+`--tests` reads a results report (PDF, Word or text) and picks out whatever it finds.
+Each kind of result counts by how well it predicts job fit:
+
+- **Holland interests (RIASEC)**, scores or a code like "SIA": the main signal. They're
+  correlated with O*NET's interest profile for each occupation (weight 2). The free
+  [O*NET Interest Profiler](https://www.mynextmove.org/explore/ip) gives these scores.
+- **Big Five** percentiles (or a 1–5 scale): compared with how much each job's O*NET work
+  styles call for each trait (conscientiousness with dependability and attention to
+  detail, for example), as a light signal (weight 1).
+- **Myers-Briggs**: types predict job fit poorly and have no official link to occupations,
+  so a type only becomes rough interest scores, from the direction of published
+  MBTI–RIASEC correlations, and counts little (weight 0.75). It's ignored when interest
+  scores are given.
+- **IQ**: shown next to each occupation's reasoning demand (the quartile of its O*NET
+  reasoning-ability levels). It never changes the ranking: one number says little about
+  which field suits someone, and screening on it raises fairness concerns.
+
+The dashboard's Resume check tab has the same inputs. It also has an 18-question interest
+quiz for people who haven't taken a test, which is a rough sketch, not a validated test.
+
 ### Checking a resume against specific postings
 
 With `--resume`, each posting in the best-fitting occupations is checked against the

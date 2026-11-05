@@ -77,6 +77,7 @@ def occupation_traits(version, cache_dir, user_agent, onet_dir=None):
     abilities = abilities[(abilities["Scale ID"] == "LV") & abilities["Element Name"].isin(REASONING)]
     reasoning = abilities.groupby("O*NET-SOC Code")["Data Value"].mean().rename("reasoning")
     out = riasec.join(big5.add_prefix("b5_"), how="outer").join(reasoning, how="outer")
+    out["reasoning_band"] = [reasoning_band(v, reasoning) for v in out["reasoning"]]
     out.index.name = "onet_code"
     return out.reset_index()
 
@@ -211,7 +212,6 @@ def trait_signals(tests, traits):
     riasec = tests.get("riasec")
     mbti_scores = None if riasec else mbti_to_riasec(tests.get("mbti"))
     big5 = tests.get("big_five")
-    levels = traits["reasoning"].dropna()
     out = {}
     raw_styles = {}
     for row in traits.to_dict("records"):
@@ -224,7 +224,7 @@ def trait_signals(tests, traits):
             raw_styles[row["onet_code"]] = style_fit(big5, row)
         code = holland_code(row) if all(not pd.isna(row.get(k)) for k in RIASEC) else None
         out[row["onet_code"]] = {"signals": {k: v for k, v in s.items() if v is not None}, "holland": code,
-                                 "reasoning": reasoning_band(row.get("reasoning"), levels)}
+                                 "reasoning": row.get("reasoning_band")}
     # Work-style fit varies little in absolute terms: spread it over 0-1.
     found = [v for v in raw_styles.values() if v is not None]
     if found:

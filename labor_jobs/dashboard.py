@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, jolts, majors, occupation_text, personality, skills
+from . import bls, h1b, jolts, majors, occupation_text, personality, posting_requirements, skills
 from .matching import build_matcher
 from .soc_mapping import load_onet_titles, load_title_overrides
 
@@ -131,7 +131,7 @@ def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_y
             "id": rows["job_id"].astype(str), "t": rows["title"], "c": rows["company_name"], "l": rows["location"],
             "s": rows["state"], "p": rows["annual_salary"].round(), "o": rows["onet_code"],
             "k": rows.get("technologies"), "y": rows.get("years_required"), "d": rows.get("degree_required"),
-            "f": rows.get("degree_flexible"), "u": rows.get("url")})
+            "f": rows.get("degree_flexible"), "u": rows.get("url"), "r": rows.get("credentials_required")})
         compact["f"] = compact["f"].map(lambda v: None if pd.isna(v) else (1 if v is True or v == "True" else 0))
         _save(out, f"postings_{group}", _clean(compact))
         groups.append(group)
@@ -144,10 +144,15 @@ def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_y
         lambda s: ";".join(t.strip().rsplit(" ", 1)[0] if t.strip().endswith("%") else t.strip()
                            for t in s.split(",") if t.strip()))
     occ["edu"] = occ.get("typical_education").map(edu) if "typical_education" in occ else None
+    # What employers require (ORS / O*NET) and what postings ask for.
+    need_cols = [c for c in [*(f"edu_{lv}" for lv in range(6)), "exp_pct", "exp_years", "license_pct",
+                             "credentials_required", "credentials_preferred", "soft_skills"] if c in occ]
     _save(out, "fit_occupations", _clean(occ[["onet_code", "soc_code", "onet_title", "postings", "techs", "edu",
-                                              "typical_education"]].rename(columns={"onet_title": "title"})))
+                                              "typical_education", *need_cols]].rename(columns={"onet_title": "title"})))
+    _save(out, "credential_patterns", posting_requirements.export_rows())
 
-    traits = personality.occupation_traits(onet_version, cache, user_agent)
+    traits = personality.blend_posting_traits(personality.occupation_traits(onet_version, cache, user_agent),
+                                              detailed)
     codes = set(occ["onet_code"])
     _save(out, "occupation_traits", [
         {"o": r.onet_code, **{k.lower(): None if pd.isna(getattr(r, k)) else round(getattr(r, k), 2)

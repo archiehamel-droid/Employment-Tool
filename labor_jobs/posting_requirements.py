@@ -130,3 +130,54 @@ def occupation_summary(postings, min_postings=10, top=8):
             row[f"soft_{trait}"] = round(float(soft.map(lambda s: bool(names & set(s))).mean()), 3)
         rows.append(row)
     return rows
+
+
+def js_pattern(pattern):
+    """A pattern for browsers without scoped flags: each (?i:...) group spelled
+    out with both cases of its letters ("(?i:rn)" -> "(?:[rR][nN])")."""
+    out, i, depth_i, stack = [], 0, 0, []
+    in_class = False
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            esc = pattern[i:i + 2]
+            out.append(esc)
+            i += 2
+            continue
+        if in_class:
+            if ch == "]":
+                in_class = False
+            elif depth_i and ch.isalpha():
+                ch = ch.lower() + ch.upper()
+            out.append(ch)
+        elif pattern.startswith("(?i:", i):
+            stack.append(True)
+            depth_i += 1
+            out.append("(?:")
+            i += 4
+            continue
+        elif ch == "(":
+            stack.append(False)
+            out.append(ch)
+        elif ch == ")":
+            if stack and stack.pop():
+                depth_i -= 1
+            out.append(ch)
+        elif ch == "[":
+            in_class = True
+            out.append(ch)
+        elif depth_i and ch.isalpha():
+            out.append(f"[{ch.lower()}{ch.upper()}]")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def export_rows():
+    """Credential and soft-skill patterns for the browser, in its regex syntax."""
+    rows = [{"name": name, "kind": kind, "pattern": js_pattern(pattern), "flags": ""}
+            for name, (pattern, kind) in CREDENTIALS.items()]
+    rows += [{"name": name, "kind": "soft", "trait": trait, "pattern": pattern, "flags": "i"}
+             for name, (pattern, trait) in SOFT_SKILLS.items()]
+    return rows

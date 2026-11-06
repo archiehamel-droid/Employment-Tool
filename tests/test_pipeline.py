@@ -1053,3 +1053,39 @@ def test_usajobs_announcement_text():
     assert text.startswith("Qualifications\nSpecialized experience:\n- One year at GS-11")
     assert "How you will be evaluated\nYou will be evaluated on Communication & Customer Service." in text
     assert "Education" not in text  # "None" sections are left out
+
+
+def test_requirements_and_credentials_shape_the_fit():
+    from labor_jobs import match
+    detailed = pd.DataFrame({
+        "onet_code": ["29-1141.00", "53-3032.00"], "soc_code": ["29-1141", "53-3032"],
+        "onet_title": ["Registered Nurses", "Heavy and Tractor-Trailer Truck Drivers"], "postings": [50, 50],
+        "posting_technologies": [None, None], "onet_hot_technologies": [None, None],
+        "typical_education": ["Bachelor's degree", "Postsecondary nondegree award"],
+        "edu_0": [0, 95], "edu_1": [0, 5], "edu_2": [62, 0], "edu_3": [38, 0], "edu_4": [0, 0], "edu_5": [0, 0],
+        "exp_pct": [80, 71], "exp_years": [1.5, 1.0], "license_pct": [None, 95],
+        "credentials_required": ["Registered nurse (RN) license 82%; BLS/CPR 40%", "Commercial driver's license (CDL) 90%"],
+        "credentials_preferred": [None, None]})
+    nurse = {"titles": {}, "technologies": [], "education_level": 2, "years": 3.0, "from_resume": True,
+             "credentials": ["Registered nurse (RN) license", "BLS/CPR"]}
+    occ = match.score_occupations(detailed, nurse, None).set_index("onet_code")
+    assert occ.index[0] == "29-1141.00"
+    assert "holds Registered nurse (RN) license (82% of postings require it)" in occ.loc["29-1141.00", "why"]
+    assert "38% of jobs need more than an associate's degree" in occ.loc["29-1141.00", "why"]
+    # The driver occupation isn't scored on credentials the nurse lacks... but mostly needs a CDL.
+    factor, why = match.requirement_adjustments(next(detailed.iloc[[1]].itertuples(index=False)), nurse)
+    assert factor == 0.85 and why == ["most jobs require Commercial driver's license (CDL), not on the resume"]
+    # Too little experience lowers the fit a little, scaled by how many jobs require it.
+    junior = {**nurse, "years": 0.0}
+    f_junior, why_junior = match.requirement_adjustments(next(detailed.iloc[[0]].itertuples(index=False)), junior)
+    f_senior, _ = match.requirement_adjustments(next(detailed.iloc[[0]].itertuples(index=False)), nurse)
+    assert round(f_senior / f_junior, 3) == round(1 / (1 - 0.3 * 0.8), 3)
+    assert "80% of jobs want prior experience, typically 1.5+ years" in why_junior
+
+    Row = __import__("collections").namedtuple(
+        "Row", "title years_required degree_required degree_flexible onet_code credentials_required")
+    row = Row("Travel RN", None, None, False, "29-1141.00", "Registered nurse (RN) license; ACLS/PALS")
+    checks = match.posting_checks(row, set(), nurse, 0.8, "Bachelor's degree", (1.5, 80))
+    assert checks["credentials_check"] == "close"  # ACLS is a certification, not a license
+    assert checks["credentials_detail"] == "requires Registered nurse (RN) license, ACLS/PALS; not on resume: ACLS/PALS"
+    assert checks["experience_detail"] == "~1.5+ yrs typical for the occupation; resume shows 3"

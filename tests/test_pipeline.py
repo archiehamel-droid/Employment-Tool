@@ -1010,3 +1010,46 @@ def test_interests_rank_matching_occupations_first():
     # Myers-Briggs is used only without real interest scores.
     assert "mbti" in P.trait_signals({"mbti": "ENFJ"}, traits)["25-2021.00"]["signals"]
     assert "mbti" not in P.trait_signals({"mbti": "ENFJ", "riasec": P.riasec_from_code("S")}, traits)["25-2021.00"]["signals"]
+
+
+def test_posting_credentials_and_soft_skills():
+    from labor_jobs.posting_requirements import credentials_in, posting_requirements
+    text = ("Requirements\nActive RN license in the state of Texas. BLS required.\n"
+            "Strong communication skills and attention to detail.\n"
+            "Preferred Qualifications\nACLS certification.\nCPA or CMA a plus.")
+    required, preferred, soft = posting_requirements(text)
+    assert required == ["BLS/CPR", "Registered nurse (RN) license"]
+    assert preferred == ["ACLS/PALS", "CPA"]
+    assert soft == ["Attention to detail", "Communication"]
+    assert posting_requirements("") == ([], [], [])
+    assert credentials_in("Licensed journeyman electrician; OSHA 30") == ["Electrician license", "OSHA 10/30"]
+    assert credentials_in("Class A CDL with Hazmat") == ["Commercial driver's license (CDL)"]
+    assert credentials_in("RN-to-BSN program coordinator") == []  # "RN to" isn't a license
+
+
+def test_education_and_experience_requirements():
+    from labor_jobs import job_requirements as J
+    ors = pd.DataFrame([
+        {"soc_code": "29-1141", "edu_0": 0, "edu_1": None, "edu_2": 61.8, "edu_3": 38.2, "edu_4": None, "edu_5": None,
+         "edu_published": 100, "exp_pct": 17.6, "exp_years": None, "license_pct": None, "apprenticeship_pct": None},
+        {"soc_code": "15-1250", "edu_0": 5, "edu_1": None, "edu_2": 10, "edu_3": 85, "edu_4": None, "edu_5": None,
+         "edu_published": 100, "exp_pct": 76, "exp_years": 2.0, "license_pct": 1.3, "apprenticeship_pct": None}])
+    onet = pd.DataFrame([{"onet_code": "29-1141.00", "edu_0": 1, "edu_1": 22, "edu_2": 19, "edu_3": 57, "edu_4": 1,
+                          "edu_5": 0, "exp_pct": 81, "exp_years": 1.5}])
+    t = J.requirements_table(["29-1141.00", "15-1252.00"], ors, onet).set_index("onet_code")
+    rn = t.loc["29-1141.00"].to_dict()
+    assert rn["edu_source"] == "ORS" and rn["exp_source"] == "O*NET"  # ORS experience years suppressed
+    assert round(J.share_requiring_more(rn, 2)) == 38 and J.typical_education(rn) == 2
+    dev = t.loc["15-1252.00"].to_dict()  # from the broad group 15-1250
+    assert dev["exp_years"] == 2.0 and dev["license_pct"] == 1.3 and J.typical_education(dev) == 3
+
+
+def test_usajobs_announcement_text():
+    from labor_jobs.usajobs import announcement_text
+    item = {"requirementsQualifications": "<p>Specialized experience:</p><ul><li>One year at GS-11</li></ul>",
+            "evaluations": "You will be evaluated on <b>Communication</b> &amp; Customer Service.",
+            "requirementsEducation": "None"}
+    text = announcement_text(item)
+    assert text.startswith("Qualifications\nSpecialized experience:\n- One year at GS-11")
+    assert "How you will be evaluated\nYou will be evaluated on Communication & Customer Service." in text
+    assert "Education" not in text  # "None" sections are left out

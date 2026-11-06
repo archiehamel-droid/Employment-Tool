@@ -42,12 +42,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, majors, occupation_text, personality, requirements, skills
+from . import (bls, h1b, job_requirements, majors, occupation_text, personality, posting_requirements, requirements,
+               skills)
 from .matching import build_matcher
 from .report import table
 from .soc_mapping import load_onet_titles, load_title_overrides, normalize_title
 
-WEIGHTS = {"title": 3.0, "duties": 3.0, "major": 1.0, "skills": 1.5, **personality.WEIGHTS}
+WEIGHTS = {"title": 3.0, "duties": 3.0, "major": 1.0, "skills": 1.5, "credentials": 2.0, **personality.WEIGHTS}
+# A credential required by this share of an occupation's postings (percent) counts fully.
+CREDENTIAL_FULL = 30
 # A major leading to this many occupations or fewer gives full credit to each.
 MAJOR_SPECIFIC = 6
 CONFIDENT_METHODS = {"exact", "override", "employer", "technology", "keyword", "partial"}
@@ -114,7 +117,8 @@ def resume_profile(text, matcher, technologies, major_matcher, text_model=None):
             "education": label, "years": requirements.resume_years(text),
             # Words of the resume, for comparing posting titles; not written to any output.
             "words": set(normalize_title(text).split()),
-            "text_similarity": text_model.similarity(text) if text_model else {}}
+            "text_similarity": text_model.similarity(text) if text_model else {},
+            "credentials": posting_requirements.credentials_in(text)}
 
 
 def _tech_names(value):
@@ -122,6 +126,59 @@ def _tech_names(value):
     if not isinstance(value, str):
         return set()
     return {re.sub(r"\s+\d+%$", "", t.strip()) for t in value.split(",") if t.strip()}
+
+
+def _shares(value):
+    """"Name 42%; Name 30%" -> {"Name": 42.0, "Name": 30.0}."""
+    if not isinstance(value, str):
+        return {}
+    out = {}
+    for part in value.split("; "):
+        name, _, pct = part.rpartition(" ")
+        if name and pct.endswith("%"):
+            out[name] = float(pct[:-1])
+    return out
+
+
+def _value(occ, name):
+    v = getattr(occ, name, None)
+    return None if v is None or (isinstance(v, float) and math.isnan(v)) else v
+
+
+def requirement_adjustments(occ, profile):
+    """(multiplier, reasons) from what employers require for the occupation,
+    against the resume: education (the share of jobs needing more than the
+    resume's highest degree), prior experience, and licenses most postings
+    require that the resume doesn't show."""
+    factor, why = 1.0, []
+    level = profile.get("education_level")
+    row = {f"edu_{lv}": _value(occ, f"edu_{lv}") for lv in range(6)}
+    more = job_requirements.share_requiring_more(row, level) if level is not None else None
+    if more is not None:
+        factor *= 1 - 0.5 * more / 100
+        if more >= 30:
+            why.append(f"{more:.0f}% of jobs need more than {job_requirements.LEVEL_NAMES[level]}")
+    else:
+        needs = majors.BLS_EDUCATION.get(_value(occ, "typical_education"))
+        # Only a degree: certificates and training (a CDL, an apprenticeship)
+        # don't show up as an education level on a resume.
+        if needs is not None and needs >= 2 and level is not None and needs > level:
+            factor *= 0.5
+            why.append(f"usually needs: {occ.typical_education}")
+    years, need, pct = profile.get("years"), _value(occ, "exp_years"), _value(occ, "exp_pct")
+    if profile.get("from_resume") and years is not None and need and pct and years < need:
+        factor *= 1 - 0.3 * (pct / 100) * min(1.0, (need - years) / need)
+        if pct >= 50:
+            why.append(f"{pct:.0f}% of jobs want prior experience, typically {need:g}+ years")
+    if profile.get("from_resume"):
+        held = set(profile.get("credentials") or [])
+        required = _shares(_value(occ, "credentials_required"))
+        top = max(required.items(), key=lambda kv: kv[1], default=None)
+        licensed = (_value(occ, "license_pct") or 0) >= 50
+        if top and top[1] >= 20 and top[0] not in held and (licensed or top[1] >= 50):
+            factor *= 0.85
+            why.append(f"most jobs require {top[0]}, not on the resume")
+    return factor, why
 
 
 def score_occupations(detailed, profile, major_socs):
@@ -134,9 +191,13 @@ def score_occupations(detailed, profile, major_socs):
              program leads to many occupations
     skills   technologies the occupation's postings ask for, rare ones counting
              more than ones nearly every occupation lists (Excel)
+    credentials  licenses and certifications on the resume that the occupation's
+             postings require (only when the resume shows any)
     and, from personality.trait_signals when test results are given, interests
-    (Holland/RIASEC), work styles (Big Five) and, weakly, Myers-Briggs.
-    Occupations usually needing a higher degree than the resume shows count half."""
+    (Holland/RIASEC), work styles (Big Five, blended with the soft skills its
+    postings ask for) and, weakly, Myers-Briggs. Then requirement_adjustments
+    lowers occupations whose jobs mostly need more education, experience or a
+    license than the resume shows."""
     held = list(profile["titles"].items())
     recency = {code: max(0.6, 1 - 0.2 * i) for i, (code, _) in enumerate(held)}
     held_socs = {}
@@ -159,8 +220,10 @@ def score_occupations(detailed, profile, major_socs):
     # where it doesn't match), so occupations aren't scored on fewer signals.
     traits = profile.get("traits") or {}
     trait_keys = sorted({k for t in traits.values() for k in t["signals"]})
+    held_credentials = set(profile.get("credentials") or [])
     available = [k for k, present in (("title", bool(held)), ("duties", best_text > 0),
-                                      ("major", bool(major_socs)), ("skills", bool(resume_tech))) if present]
+                                      ("major", bool(major_socs)), ("skills", bool(resume_tech)),
+                                      ("credentials", bool(held_credentials))) if present]
     available += trait_keys
     if not available:
         return detailed.iloc[0:0].assign(fit_score=[], why=[], skills_to_add=[])
@@ -185,6 +248,13 @@ def score_occupations(detailed, profile, major_socs):
             signals["skills"] = min(1.0, sum(tech_weight[t] for t in overlap) / tech_total)
             if overlap:
                 why.append("skills: " + ", ".join(overlap[:6]))
+        if held_credentials:
+            asked = _shares(_value(occ, "credentials_required"))
+            preferred = _shares(_value(occ, "credentials_preferred"))
+            best = max(((asked.get(c, 0) + 0.5 * preferred.get(c, 0), c) for c in held_credentials), default=(0, None))
+            signals["credentials"] = min(1.0, best[0] / CREDENTIAL_FULL)
+            if best[0] >= 10:
+                why.append(f"holds {best[1]} ({asked.get(best[1], 0):.0f}% of postings require it)")
         trait = traits.get(occ.onet_code, {"signals": {}})
         for k in trait_keys:
             signals[k] = trait["signals"].get(k, 0.0)
@@ -193,12 +263,9 @@ def score_occupations(detailed, profile, major_socs):
         if trait["signals"].get("styles", 0) >= 0.7:
             why.append("personality suits its work styles")
         fit = sum(WEIGHTS[k] * signals[k] for k in available) / sum(WEIGHTS[k] for k in available)
-        needs = majors.BLS_EDUCATION.get(getattr(occ, "typical_education", None))
-        # Only a degree: certificates and training (a CDL, an apprenticeship)
-        # don't show up as an education level on a resume.
-        if needs is not None and needs >= 2 and needs > profile["education_level"]:
-            fit *= 0.5
-            why.append(f"usually needs: {occ.typical_education}")
+        factor, reasons = requirement_adjustments(occ, profile)
+        fit *= factor
+        why += reasons
         missing = sorted(_tech_names(getattr(occ, "posting_technologies", None)) - resume_tech)
         rows.append({"onet_code": occ.onet_code, "fit_score": round(fit, 3),
                      "why": "; ".join(why), "skills_to_add": ", ".join(missing[:6]),
@@ -279,8 +346,10 @@ def rank_postings(postings, occupations, profile, top_occupations, states=None, 
     df["title_relevance"] = title_relevance(df["title"], profile.get("words", set())) if len(df) else []
     df["match_score"] = (df["onet_code"].map(fit) + 0.5 * coverage + df["title_relevance"]).round(3)
     education = dict(zip(best["onet_code"], best.get("typical_education", pd.Series(dtype=object))))
+    experience = dict(zip(best["onet_code"], zip(best.get("exp_years", pd.Series([None] * len(best))),
+                                                 best.get("exp_pct", pd.Series([None] * len(best))))))
     checks = [posting_checks(row, posting_tech[i], profile, fit.get(row.onet_code),
-                             education.get(row.onet_code))
+                             education.get(row.onet_code), experience.get(row.onet_code))
               for i, row in zip(df.index, df.itertuples(index=False))]
     df = df.join(pd.DataFrame(checks, index=df.index))
     df["rank_score"] = df["match_score"] + df["rating"].map(RATING_BONUS).fillna(0)
@@ -297,8 +366,11 @@ def _grade(have, need, close):
     return "close" if have >= close else "short"
 
 
-def posting_checks(row, posting_tech, profile, occupation_fit, occupation_education):
-    """The four checks for one posting, their descriptions, and the rating."""
+def posting_checks(row, posting_tech, profile, occupation_fit, occupation_education, occupation_experience=None):
+    """The checks for one posting (skills, experience, education, credentials,
+    occupation), their descriptions, and the rating. occupation_experience is
+    (typical years, percent of jobs requiring experience) from ORS/O*NET, used
+    when the posting states no years."""
     resume_tech = set(profile["technologies"])
     out = {}
     # Skills the posting names.
@@ -315,13 +387,17 @@ def posting_checks(row, posting_tech, profile, occupation_fit, occupation_educat
     if need is None:
         need, label = requirements.seniority(row.title)
         basis = label.lower() if label else None
+    if need is None and occupation_experience and occupation_experience[0] and (occupation_experience[1] or 0) >= 50:
+        need, basis = float(occupation_experience[0]), "typical for the occupation"
     have = profile.get("years")
     if need is None or have is None:
         out["experience_check"] = "not stated"
         out["experience_detail"] = "no years asked" if need is None else "no dates on resume"
     else:
         out["experience_check"] = _grade(have, need, max(need - 1, need * 0.75))
-        asked = f"{need:g}+ yrs {basis}" if basis == "asked" else f"{basis} (~{need:g}+ yrs)"
+        asked = (f"{need:g}+ yrs {basis}" if basis == "asked" else
+                 f"~{need:g}+ yrs typical for the occupation" if basis == "typical for the occupation" else
+                 f"{basis} (~{need:g}+ yrs)")
         out["experience_detail"] = f"{asked}; resume shows {have:g}"
     # Education.
     level = getattr(row, "degree_required", None)
@@ -339,12 +415,26 @@ def posting_checks(row, posting_tech, profile, occupation_fit, occupation_educat
         out["education_check"] = check
         out["education_detail"] = (f"{name} required" + (" or equivalent experience" if flexible else "")
                                    if source == "posting" else f"{name} typical for the occupation")
+    # Credentials the posting requires.
+    required = [c for c in str(getattr(row, "credentials_required", "") or "").split("; ") if c and c != "nan"]
+    if not required:
+        out["credentials_check"], out["credentials_detail"] = "not stated", "none required"
+    elif not profile.get("from_resume"):
+        out["credentials_check"], out["credentials_detail"] = "not stated", "requires " + ", ".join(required)
+    else:
+        held = set(profile.get("credentials") or [])
+        missing = [c for c in required if c not in held]
+        hard = [c for c in missing if posting_requirements.CREDENTIALS[c][1] in ("license", "clearance")]
+        out["credentials_check"] = "meets" if not missing else ("short" if hard else "close")
+        out["credentials_detail"] = ("requires " + ", ".join(required) +
+                                     ("; all on resume" if not missing else "; not on resume: " + ", ".join(missing)))
     # Occupation fit.
     if occupation_fit is None:
         out["occupation_check"] = "not stated"
     else:
         out["occupation_check"] = "meets" if occupation_fit >= 0.5 else ("close" if occupation_fit >= 0.25 else "short")
-    grades = [out[k] for k in ("skills_check", "experience_check", "education_check", "occupation_check")]
+    grades = [out[k] for k in ("skills_check", "experience_check", "education_check", "credentials_check",
+                               "occupation_check")]
     meets, close, short = grades.count("meets"), grades.count("close"), grades.count("short")
     if short == 0 and close == 0 and meets >= 2:
         out["rating"] = "Strong match"
@@ -353,7 +443,7 @@ def posting_checks(row, posting_tech, profile, occupation_fit, occupation_educat
     else:
         out["rating"] = "Partial match"
     names = {"skills_check": "skills", "experience_check": "experience", "education_check": "education",
-             "occupation_check": "occupation"}
+             "credentials_check": "credentials", "occupation_check": "occupation"}
     gaps = [names[k] for k in names if out[k] in ("short", "close")]
     out["rating_reason"] = ("meets what it states" if not gaps else
                             "check " + ", ".join(gaps))
@@ -369,6 +459,11 @@ def skills_to_add(postings, limit=10):
     return counts.rename_axis("technology").reset_index(name="postings")
 
 
+def _top(value, n):
+    """The first n entries of a "Name 42%; Name 30%" list."""
+    return "; ".join(str(value).split("; ")[:n]) if isinstance(value, str) and value else ""
+
+
 def build_report(profile, major_text, major_hits, occupations, postings, results_dir, top):
     lines = ["# Job matches", ""]
     if profile.get("from_resume"):
@@ -376,6 +471,7 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
         lines += ["## From the resume",
                   f"- Job titles recognized: {held}",
                   f"- Technologies: {', '.join(profile['technologies']) or 'none recognized'}",
+                  f"- Licenses and certifications: {', '.join(profile.get('credentials') or []) or 'none recognized'}",
                   f"- Highest degree: {profile['education']}",
                   "- Years of work experience (from job dates): "
                   + (f"{profile['years']:g}" if profile.get("years") is not None else "no dates found"),
@@ -403,12 +499,16 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
     if major_hits:
         lines += ["## Major", f"\"{major_text}\" was matched to: " +
                   "; ".join(f"{title} (CIP {code})" for code, title, _ in major_hits), ""]
+    occupations = occupations.assign(employers_ask=[
+        "; ".join(x for x in (_top(r.get("credentials_required"), 3), _top(r.get("soft_skills"), 3)) if x)
+        for r in occupations.to_dict("records")])
     lines += [f"## Best-fitting occupations (from `{results_dir}`)",
               table(occupations.head(top), {
                   "onet_title": "Occupation", "fit_score": "Fit", "postings": "Postings",
                   "median_posted_salary": "Posted median $", "bls_median_wage": "BLS median $",
                   "proj_growth_pct": "Growth % (10 yr)", "typical_education": "Typical education",
                   "why": "Why", "skills_to_add": "Skills in postings not on resume",
+                  "employers_ask": "Employers often ask for",
                   **({"holland_code": "Holland code", "reasoning_demand": "Reasoning demand"} if tests else {})}),
               "",
               "Fit (0 to 1) weighs held job titles, how closely described duties match each "
@@ -431,6 +531,7 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
                   "location": "Location", "annual_salary": "Salary $",
                   "matched_skills": "Your skills it lists", "missing_skills": "Skills it lists you lack",
                   "experience_detail": "Experience", "education_detail": "Education",
+                  "credentials_detail": "Credentials",
                   "rating_reason": "Look at", "url": "Link"}),
               ""]
     if "rating" in postings and len(postings):
@@ -551,6 +652,7 @@ def main(argv=None):
     if any(tests.values()):
         profile["tests"] = tests
         traits = personality.occupation_traits(args.onet_version, args.cache, user_agent, args.onet_dir)
+        traits = personality.blend_posting_traits(traits, detailed)
         profile["traits"] = personality.trait_signals(tests, traits[traits["onet_code"].isin(detailed["onet_code"])])
     occupations = score_occupations(detailed, profile, major_socs)
     ranked = rank_postings(postings, occupations, profile, args.top, args.state, args.metro,

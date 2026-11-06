@@ -82,6 +82,26 @@ def occupation_traits(version, cache_dir, user_agent, onet_dir=None):
     return out.reset_index()
 
 
+def blend_posting_traits(traits, detailed, min_postings=10):
+    """Mix what postings ask for into each occupation's Big Five demand: the
+    share of its postings asking for soft skills tied to each trait (from
+    posting_requirements, ranked across occupations) averaged with the O*NET
+    work-style ranking, where at least min_postings postings were read."""
+    cols = [f"soft_{t}" for t in BIG_FIVE]
+    if detailed is None or not set(cols) <= set(detailed.columns):
+        return traits
+    asked = detailed[detailed.get("postings_with_text", 0) >= min_postings][["onet_code", *cols]].dropna()
+    if asked.empty:
+        return traits
+    ranks = asked.set_index("onet_code")[cols].rank(pct=True)
+    out = traits.copy()
+    for t in BIG_FIVE:
+        posted = out["onet_code"].map(ranks[f"soft_{t}"])
+        onet = out[f"b5_{t}"]
+        out[f"b5_{t}"] = onet.where(posted.isna(), (onet.fillna(posted) + posted) / 2)
+    return out
+
+
 def reasoning_band(level, levels):
     """'Lower', 'Moderate', 'High' or 'Very high' reasoning demand: the
     occupation's quartile among all occupations."""

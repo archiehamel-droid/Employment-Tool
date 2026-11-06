@@ -7,8 +7,10 @@ from datetime import date
 from pathlib import Path
 
 
-from . import (bls, h1b, history, jolts, merge, metros, perm, projections, report, requirements,
-               skills)
+import pandas as pd
+
+from . import (bls, h1b, history, job_requirements, jolts, merge, metros, perm, posting_requirements,
+               projections, report, requirements, skills)
 from .matching import build_matcher
 from .linkedin import load_all
 from .soc_mapping import is_gig, load_onet_titles, load_title_overrides
@@ -82,6 +84,10 @@ def parse_args(argv=None):
                    help="don't scan posting descriptions for technologies (saves a minute "
                         "or two on large files)")
     return p.parse_args(argv)
+
+
+# Descriptions at least this long count as full text (Adzuna sends 500-character snippets).
+FULL_TEXT_CHARS = 1000
 
 
 def main(argv=None):
@@ -181,6 +187,15 @@ def main(argv=None):
         degrees = postings["description"].map(requirements.degree_required)
         postings["degree_required"] = degrees.str[0]
         postings["degree_flexible"] = degrees.str[1]
+        # Credentials and soft skills employers ask for. Only full descriptions
+        # count toward occupation shares: Adzuna's 500-character snippets cut
+        # most requirements off.
+        print("Reading credentials and soft skills from posting text...")
+        found = postings["description"].map(posting_requirements.posting_requirements)
+        postings["credentials_required"] = found.str[0].map("; ".join)
+        postings["credentials_preferred"] = found.str[1].map("; ".join)
+        postings["soft_skills"] = found.str[2].map("; ".join)
+        postings["text_read"] = postings["description"].fillna("").str.len() >= FULL_TEXT_CHARS
     postings = postings.drop(columns=["description"], errors="ignore")
 
     print("Combining...")
@@ -219,6 +234,17 @@ def main(argv=None):
                                     on=["state", "soc_code"], how="left")
         if "h1b" in extras:
             extras["h1b"] = (detailed, args.h1b_year)
+    if "text_read" in postings:
+        asks = pd.DataFrame(posting_requirements.occupation_summary(postings))
+        if len(asks):
+            detailed = detailed.merge(asks, on="onet_code", how="left")
+    print("Loading BLS ORS and O*NET education and experience requirements...")
+    needs = job_requirements.load(detailed["onet_code"].tolist(), args.onet_version, args.cache, user_agent,
+                                  args.onet_dir)
+    if len(needs):
+        detailed = detailed.merge(needs, on="onet_code", how="left")
+        sources.append("BLS Occupational Requirements Survey (ORS) 2025 and O*NET Education, Training, and "
+                       "Experience: minimum education, prior experience and licensing by occupation")
     detailed.to_csv(out / "detailed_occupations.csv", index=False)
     extras["detailed"] = detailed
 

@@ -255,6 +255,32 @@ It writes `matches.md`, `matching_occupations.csv` and `matching_postings.csv` t
   and `--min-salary`. The occupation table also lists technologies common in that
   occupation's postings that the resume doesn't mention.
 
+### Choosing what to rank by
+
+Occupations can be ranked by four things, each with a weight:
+
+- **resume**: fit from job titles, duties, major, skills and credentials
+- **personality**: fit from interest and personality test results
+- **salary**: the occupation's BLS median wage (else the posted median, with 20+ salaries),
+  ranked against all occupations
+- **outlook**: BLS projected 10-year growth (60%) and yearly openings (40%), ranked
+
+```bash
+python -m labor_jobs.match --resume jane.docx --rank-by pay
+python -m labor_jobs.match --resume jane.docx --rank-by "resume=60,salary=100,outlook=40"
+python -m labor_jobs.match --resume jane.docx --ignore-requirements --sort-postings salary
+```
+
+Presets are `balanced`, `resume`, `personality`, `pay` and `outlook`; the default
+(`resume=100,personality=40`) matches the ranking before these options existed. Salary and
+outlook count in proportion to how well the person fits (fully from a fit of 0.4), so
+ranking by pay favors well-paid jobs they could do; with no resume or tests, the ranking
+is by pay or outlook alone. `--ignore-requirements` stops lowering occupations whose jobs
+mostly need more education, experience or a license than the resume shows. The salary
+weight also counts toward the order of postings, and `--sort-postings salary` lists the
+highest advertised pay first. The dashboard's Resume check tab has the same settings as
+sliders and presets, kept in the reader's browser.
+
 ### What employers ask for
 
 Three sources say what employers screen for, and feed both the occupation fit and the

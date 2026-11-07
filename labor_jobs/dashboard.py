@@ -146,7 +146,10 @@ def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_y
     occ["edu"] = occ.get("typical_education").map(edu) if "typical_education" in occ else None
     # What employers require (ORS / O*NET) and what postings ask for.
     need_cols = [c for c in [*(f"edu_{lv}" for lv in range(6)), "exp_pct", "exp_years", "license_pct",
-                             "credentials_required", "credentials_preferred", "soft_skills"] if c in occ]
+                             "credentials_required", "credentials_preferred", "soft_skills",
+                             # pay and outlook, for ranking by them
+                             "bls_median_wage", "median_posted_salary", "salary_samples", "proj_growth_pct",
+                             "proj_annual_openings"] if c in occ]
     _save(out, "fit_occupations", _clean(occ[["onet_code", "soc_code", "onet_title", "postings", "techs", "edu",
                                               "typical_education", *need_cols]].rename(columns={"onet_title": "title"})))
     _save(out, "credential_patterns", posting_requirements.export_rows())

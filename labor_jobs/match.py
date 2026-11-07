@@ -86,7 +86,8 @@ def title_candidates(text, technologies=()):
     tech = {normalize_title(t) for t in technologies}
     out = []
     for line in text.splitlines():
-        if line.count(",") >= 3:
+        # Skill lists, and bullets, which describe duties rather than name jobs.
+        if line.count(",") >= 3 or re.match(r"\s*[-•*·▪●◦–]\s", line):
             continue
         for part in re.split(r"\s+[|–—-]\s+|\s+at\s+|,|\t|\s{2,}", line):
             part = part.strip(" •*·:")
@@ -658,7 +659,8 @@ def main(argv=None):
     options = [args.major] if args.major else profile["majors"]
     major_text, major_hits = next(((t, h) for t in options if (h := major_matcher.match(t))),
                                   (options[0] if options else None, []))
-    major_socs = set(major_matcher.occupations_for([c for c, _, _ in major_hits])) if major_hits else None
+    # The best-matching program's occupations (the dashboard does the same).
+    major_socs = set(major_matcher.occupations_for([major_hits[0][0]])) if major_hits else None
     if major_text and not major_hits:
         print(f"Couldn't match the major \"{major_text}\" to a college program; ignoring it.")
 

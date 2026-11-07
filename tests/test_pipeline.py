@@ -1110,3 +1110,21 @@ def test_rank_by_settings():
     assert "pays well: median $133,000" in by_pay.set_index("onet_code").loc["15-1252.00", "why"]
     assert match.parse_rank_by("pay") == match.RANK_PRESETS["pay"]
     assert match.parse_rank_by("salary=100, outlook=50") == {"resume": 0, "personality": 0, "salary": 100, "outlook": 50}
+
+
+def test_industries_employing_each_job():
+    from labor_jobs import industries as I
+    table = pd.DataFrame({"soc_code": ["29-1141"] * 3 + ["47-2111"] * 2,
+                          "naics": ["622", "621", "999", "238", "113"],
+                          "industry": ["Hospitals", "Ambulatory Health Care Services",
+                                       I.short_title("Federal, State, and Local Government, excluding ... (OEWS Designation)"),
+                                       "Specialty Trade Contractors", "Forestry and Logging"],
+                          "employment": [600, 300, 100, 900, 100], "median_wage": [97000, 84000, 106000, 61000, 50000]})
+    top = I.top_industries(table, n=2)
+    rn = top[top.soc_code == "29-1141"]
+    assert rn["industry"].tolist() == ["Hospitals", "Ambulatory Health Care Services"]
+    assert rn["share_pct"].tolist() == [60.0, 30.0]  # of the job's wage and salary employment
+    assert rn["jolts"].tolist() == ["Health care and social assistance"] * 2
+    assert I.jolts_industry("113") == "Mining and logging" and I.jolts_industry("999") == "Government"
+    assert I.short_title("Federal, State, and Local Government, excluding X (OEWS Designation)") == \
+        "Government (federal, state and local)"

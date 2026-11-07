@@ -222,7 +222,11 @@ The dashboard's Outlook tab views the outlook either way:
   to 2035 against all jobs, openings a year, employment now and projected, median wage,
   typical education, related experience and training, and this month's postings and
   demand index, plus how its growth compares with related jobs
-  (`occupation_outlook.json`, from `projections.read_outlook`).
+  (`occupation_outlook.json`, from `projections.read_outlook`). It also lists the industries that employ the most of the
+  job (BLS OEWS industry-specific estimates by 3-digit NAICS industry, from
+  `labor_jobs/industries.py`): each one's share of the job's wage and salary employment,
+  the median wage it pays, and the expected six-month change in openings for its JOLTS
+  industry, which links to that industry's chart (`occupation_industries.json`).
 
 ## Matching jobs to a resume or major
 

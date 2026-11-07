@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, jolts, majors, occupation_text, personality, posting_requirements, projections, skills
+from . import (bls, h1b, industries, jolts, majors, occupation_text, personality, posting_requirements, projections,
+               skills)
 from .matching import build_matcher
 from .soc_mapping import load_onet_titles, load_title_overrides
 
@@ -127,6 +128,10 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
     posted = every.set_index("soc_code")[["postings", "demand_index", "median_posted_salary"]]
     outlook = outlook.join(posted, on="soc_code")
     _save(out, "occupation_outlook", _clean(outlook))
+
+    # Which industries employ each job (OEWS industry-specific estimates), linked to JOLTS industries.
+    table = industries.read_industry_employment(industries.oews_industry_file(cache_dir, 2024, user_agent))
+    _save(out, "occupation_industries", _clean(industries.top_industries(table)))
 
     d = pd.read_csv(results / "detailed_occupations.csv", dtype={"onet_code": str, "soc_code": str})
     sp = d[d.specialized & (d.postings >= 5)].sort_values("postings", ascending=False).head(40)

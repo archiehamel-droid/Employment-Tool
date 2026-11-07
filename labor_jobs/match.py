@@ -173,8 +173,9 @@ def requirement_adjustments(occ, profile):
     if profile.get("from_resume"):
         held = set(profile.get("credentials") or [])
         required = _shares(_value(occ, "credentials_required"))
-        top = max(required.items(), key=lambda kv: kv[1], default=None)
         licensed = (_value(occ, "license_pct") or 0) >= 50
+        hard = {c: v for c, v in required.items() if c not in posting_requirements.EASY_TO_GET}
+        top = max(hard.items(), key=lambda kv: kv[1], default=None)
         if top and top[1] >= 20 and top[0] not in held and (licensed or top[1] >= 50):
             factor *= 0.85
             why.append(f"most jobs require {top[0]}, not on the resume")
@@ -221,6 +222,14 @@ def score_occupations(detailed, profile, major_socs):
     traits = profile.get("traits") or {}
     trait_keys = sorted({k for t in traits.values() for k in t["signals"]})
     held_credentials = set(profile.get("credentials") or [])
+    # How specific each credential is: required by few occupations counts more
+    # (a bar admission) than one many require (a driver's license, CPR).
+    listing = {}
+    for value in getattr(detailed, "credentials_required", pd.Series(dtype=object)):
+        for c in _shares(value):
+            listing[c] = listing.get(c, 0) + 1
+    n_listed = max(1, sum(1 for v in getattr(detailed, "credentials_required", []) if _shares(v)))
+    specificity = {c: math.log(n_listed / k) / math.log(n_listed) if n_listed > 1 else 1.0 for c, k in listing.items()}
     available = [k for k, present in (("title", bool(held)), ("duties", best_text > 0),
                                       ("major", bool(major_socs)), ("skills", bool(resume_tech)),
                                       ("credentials", bool(held_credentials))) if present]
@@ -248,11 +257,15 @@ def score_occupations(detailed, profile, major_socs):
             signals["skills"] = min(1.0, sum(tech_weight[t] for t in overlap) / tech_total)
             if overlap:
                 why.append("skills: " + ", ".join(overlap[:6]))
-        if held_credentials:
-            asked = _shares(_value(occ, "credentials_required"))
-            preferred = _shares(_value(occ, "credentials_preferred"))
-            best = max(((asked.get(c, 0) + 0.5 * preferred.get(c, 0), c) for c in held_credentials), default=(0, None))
-            signals["credentials"] = min(1.0, best[0] / CREDENTIAL_FULL)
+        asked = _shares(_value(occ, "credentials_required"))
+        preferred = _shares(_value(occ, "credentials_preferred"))
+        # Only occupations whose postings name credentials are scored on them.
+        scored = [k for k in available if k != "credentials" or asked or preferred]
+        if held_credentials and (asked or preferred):
+            best = max(((min(1.0, (asked.get(c, 0) + 0.5 * preferred.get(c, 0)) / CREDENTIAL_FULL)
+                         * specificity.get(c, 0.0), c) for c in held_credentials), default=(0, None))
+            signals["credentials"] = best[0]
+            best = (asked.get(best[1], 0) + 0.5 * preferred.get(best[1], 0), best[1]) if best[1] else (0, None)
             if best[0] >= 10:
                 why.append(f"holds {best[1]} ({asked.get(best[1], 0):.0f}% of postings require it)")
         trait = traits.get(occ.onet_code, {"signals": {}})
@@ -262,7 +275,7 @@ def score_occupations(detailed, profile, major_socs):
             why.append(f"interests match ({trait['holland']})")
         if trait["signals"].get("styles", 0) >= 0.7:
             why.append("personality suits its work styles")
-        fit = sum(WEIGHTS[k] * signals[k] for k in available) / sum(WEIGHTS[k] for k in available)
+        fit = sum(WEIGHTS[k] * signals[k] for k in scored) / sum(WEIGHTS[k] for k in scored)
         factor, reasons = requirement_adjustments(occ, profile)
         fit *= factor
         why += reasons
@@ -424,7 +437,8 @@ def posting_checks(row, posting_tech, profile, occupation_fit, occupation_educat
     else:
         held = set(profile.get("credentials") or [])
         missing = [c for c in required if c not in held]
-        hard = [c for c in missing if posting_requirements.CREDENTIALS[c][1] in ("license", "clearance")]
+        hard = [c for c in missing if posting_requirements.CREDENTIALS[c][1] in ("license", "clearance")
+                and c not in posting_requirements.EASY_TO_GET]
         out["credentials_check"] = "meets" if not missing else ("short" if hard else "close")
         out["credentials_detail"] = ("requires " + ", ".join(required) +
                                      ("; all on resume" if not missing else "; not on resume: " + ", ".join(missing)))

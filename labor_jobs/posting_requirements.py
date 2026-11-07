@@ -64,6 +64,10 @@ CREDENTIALS = {
     "Security clearance": (r"(?i:(?:secret|top\s+secret|TS/SCI|ts\s*/\s*sci)\s+(?:security\s+)?clearance|active\s+(?:security\s+)?clearance|ability\s+to\s+obtain\s+(?:and\s+maintain\s+)?(?:a\s+)?(?:security\s+)?clearance)|\bTS/SCI\b", "clearance"),  # noqa: E501
     "Notary": (r"(?i:notary\s+public)", "license"),
 }
+# Quick to get, often left off resumes, or "ability to obtain": a missing one
+# isn't a real barrier, so it never counts against a person.
+EASY_TO_GET = {"Driver's license", "BLS/CPR", "Security clearance", "Food safety (ServSafe)",
+               "Forklift certification", "OSHA 10/30"}
 # name -> (pattern, Big Five trait it reflects). Case-insensitive.
 SOFT_SKILLS = {
     "Communication": (r"communication\s+skills|communicat\w+\s+(?:clearly|effectively)|written\s+and\s+(?:oral|verbal)|verbal\s+and\s+written", "E"),  # noqa: E501
@@ -82,6 +86,9 @@ SOFT_SKILLS = {
     "Persuasion and negotiation": (r"negotiat\w+|persua\w+|influenc\w+\s+(?:stakeholders|others)|closing\s+deals", "E"),
     "Presenting": (r"presentation\s+skills|public\s+speaking|present\s+to\s+(?:executives|leadership|clients)", "E"),
 }
+# A credential or skill is listed for an occupation when at least this share
+# of its postings (percent) mention it.
+MIN_SHARE = 2
 _CRED = {name: re.compile(pattern) for name, (pattern, _) in CREDENTIALS.items()}
 _SOFT = {name: re.compile(pattern, re.I) for name, (pattern, _) in SOFT_SKILLS.items()}
 
@@ -123,6 +130,7 @@ def occupation_summary(postings, min_postings=10, top=8):
                             ("credentials_preferred", "credentials_preferred"), ("soft_skills", "soft_skills")):
             counts = group[column].fillna("").str.split("; ").explode()
             counts = counts[counts != ""].value_counts()
+            counts = counts[(counts >= 2) & (100 * counts / n >= MIN_SHARE)]
             row[out] = "; ".join(f"{name} {100 * k / n:.0f}%" for name, k in counts.head(top).items())
         soft = group["soft_skills"].fillna("").str.split("; ")
         for trait in "OCEAN":
@@ -176,7 +184,8 @@ def js_pattern(pattern):
 
 def export_rows():
     """Credential and soft-skill patterns for the browser, in its regex syntax."""
-    rows = [{"name": name, "kind": kind, "pattern": js_pattern(pattern), "flags": ""}
+    rows = [{"name": name, "kind": kind, "pattern": js_pattern(pattern), "flags": "",
+             "easy": name in EASY_TO_GET}
             for name, (pattern, kind) in CREDENTIALS.items()]
     rows += [{"name": name, "kind": "soft", "trait": trait, "pattern": pattern, "flags": "i"}
              for name, (pattern, trait) in SOFT_SKILLS.items()]

@@ -89,7 +89,7 @@ KEYWORD_RULES = [
 GIG_COMPANIES = {"uber", "doordash", "gopuff", "instacart", "lyft", "grubhub", "shipt",
                  "spark driver", "amazon flex", "roadie", "postmates", "uber eats"}
 GIG_WORDS = re.compile(r"(?i)\b(driv|deliver|dash|earn|gig|shop|courier|rideshare|"
-                       r"repartidor|conductor|sign up)")
+                       r"repartidor|conductor|sign up|entrega|ganancia|vehicle|no car)")
 
 
 def is_gig(title, company):
@@ -115,6 +115,14 @@ CONTAINED_SKIP = {
     "vehicle operator", "design engineer",
 }
 NOT_CONTAINED = GENERIC_WORDS | MODIFIER_WORDS | {"team", "member", "crew", "support", "and", "of", "general"}
+# One-word job names that mean one occupation wherever they end a title
+# (not "architect", "server", "teacher", "driver" or "nurse", which need the words before them).
+HEAD_TITLES = {
+    "cashier", "janitor", "custodian", "electrician", "plumber", "carpenter", "welder", "bartender", "dishwasher",
+    "housekeeper", "receptionist", "paralegal", "pharmacist", "dentist", "barista", "cook", "machinist", "roofer",
+    "hairstylist", "cosmetologist", "barber", "baker", "butcher", "busser", "lifeguard", "nanny", "caregiver",
+    "tutor", "librarian", "veterinarian", "optometrist", "phlebotomist", "bookkeeper", "firefighter", "stocker",
+}
 # Role after a technology name ("Power BI Developer") -> O*NET code.
 TECH_ROLES = {
     "developer": "15-1252.00",      # Software Developers
@@ -330,7 +338,7 @@ class TitleMatcher:
 
         # Technology before partial, so "Ruby on Rails Engineer" isn't cut
         # down to "rails engineer" (a railroad job).
-        for tier in (self._employer, self._keyword, self._technology, self._partial, self._contained):
+        for tier in (self._employer, self._keyword, self._technology, self._partial, self._contained, self._head):
             still = []
             for raw, variants in pending:
                 hit = tier(raw) if tier == self._keyword else tier(variants)
@@ -401,6 +409,16 @@ class TitleMatcher:
                     if key in self.lookup and key not in CONTAINED_SKIP and not set(key.split()) <= NOT_CONTAINED \
                             and not ROLE_WORDS & set(words[start + n:]):
                         return self.lookup[key], "contained", 100.0
+        return None
+
+    def _head(self, variants):
+        """A title ending in a one-word job name that means one thing
+        ("Subway Cashier", "Gift Shop Cashier", "Residential Electrician"):
+        English puts the job's head noun last."""
+        for v in reversed(variants):
+            words = v.split()
+            if len(words) >= 2 and words[-1] in HEAD_TITLES and words[-1] in self.lookup:
+                return self.lookup[words[-1]], "head", 100.0
         return None
 
     def _keyword(self, raw):

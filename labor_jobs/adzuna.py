@@ -24,6 +24,7 @@ snippets, so technology counts from Adzuna postings undercount.
 """
 
 import argparse
+import csv
 import math
 import os
 import random
@@ -31,6 +32,7 @@ import re
 import sys
 import time
 from datetime import date
+from pathlib import Path
 
 import requests
 
@@ -206,6 +208,105 @@ def sample(app_id, app_key, pages, what=None, where=None, max_days_old=31,
             time.sleep(pause)
 
 
+def title_counts(paths, column="title"):
+    """How often each exact job title (lowercased) appears in postings files,
+    to search the titles employers actually use first."""
+    counts = {}
+    csv.field_size_limit(sys.maxsize)
+    for path in paths:
+        with open(path, newline="", encoding="utf-8", errors="replace") as f:
+            for row in csv.DictReader(f):
+                t = (row.get(column) or "").strip().lower()
+                if t:
+                    counts[t] = counts.get(t, 0) + 1
+    return counts
+
+
+def read_titles(onet_dir, per_occupation=6, counts=None):
+    """Common job titles for each SOC occupation, from O*NET's sample of
+    reported titles, as search terms: the ones most often seen as posting
+    titles in `counts` first, then those shown in My Next Move."""
+    path = Path(onet_dir) / "Sample of Reported Titles.txt"
+    counts = counts or {}
+    titles = {}
+
+    def clean(row):
+        return re.sub(r"\s*\(.*?\)", "", row["Reported Job Title"]).strip()
+
+    with path.open(encoding="utf-8", errors="replace") as f:
+        rows = sorted(csv.DictReader(f, delimiter="\t"),
+                      key=lambda r: (-counts.get(clean(r).lower(), 0), r.get("Shown in My Next Move") != "Y"))
+    for row in rows:
+        title = clean(row)
+        soc = row["O*NET-SOC Code"][:7]
+        if title and title not in titles.setdefault(soc, []) and len(titles[soc]) < per_occupation:
+            titles[soc].append(title)
+    return titles
+
+
+def fill_plan(employment, postings, titles, calls, min_employment=20000, max_calls=4, searched=()):
+    """Searches aimed at the occupations with the biggest shortfall of postings:
+    each occupation's expected postings is its share of employment times the
+    postings already matched, and calls go to the largest shortfalls, a few
+    per occupation, each a different common title, skipping titles in
+    `searched` (an earlier fill's). Returns (soc, title) pairs."""
+    total = sum(postings.values())
+    emp_total = sum(employment.values())
+    gap = {}
+    for soc, emp in employment.items():
+        if emp >= min_employment and titles.get(soc):
+            expected = total * emp / emp_total
+            short = expected - postings.get(soc, 0)
+            if short > 0:
+                gap[soc] = short
+    plan, used, round_ = [], {t.lower() for t in searched}, 0
+    while len(plan) < calls and round_ < max_calls:
+        for soc in sorted(gap, key=gap.get, reverse=True):
+            if len(plan) >= calls:
+                break
+            # A further round only for occupations still far short (100+ missing per extra call).
+            if round_ and gap[soc] < 100 * round_:
+                continue
+            # Each title is searched once: a generic one ("Teacher") shared by
+            # several occupations goes to the first, the others take their next title.
+            title = next((t for t in titles[soc] if t.lower() not in used), None)
+            if title:
+                used.add(title.lower())
+                plan.append((soc, title))
+        round_ += 1
+    return plan
+
+
+def fill(app_id, app_key, plan, max_days_old=31, per_page=50, pause=2.5, session=None):
+    """Yield postings rows for each (soc, title) in the plan: the first page of
+    a title-only search for that title across the US."""
+    session = session or requests.Session()
+    for i, (soc, title) in enumerate(plan, 1):
+        try:
+            body = search(session, app_id, app_key, 1, per_page, title_only=title,
+                          max_days_old=max_days_old)
+        except PageFailed as exc:
+            print(f"  skipped {title}: {exc}")
+            continue
+        results = body.get("results", [])
+        if i % 25 == 0 or i == len(plan):
+            print(f"  {i}/{len(plan)} searches; last: {title} ({soc}), {len(results)} postings")
+        for result in results:
+            yield to_row(result)
+        time.sleep(pause)
+
+
+def _fill_inputs(results, oews_nat):
+    from .bls import read_oews
+    employment = {r.soc_code: r.tot_emp for r in read_oews(oews_nat).itertuples()
+                  if r.o_group == "detailed" and r.tot_emp == r.tot_emp}
+    postings = {}
+    with (Path(results) / "occupations.csv").open() as f:
+        for row in csv.DictReader(f):
+            postings[row["soc_code"]] = int(float(row["postings"] or 0))
+    return employment, postings
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="labor_jobs.adzuna", description=__doc__.split("\n\n")[0])
     p.add_argument("--app-id", default=os.environ.get("ADZUNA_APP_ID"))
@@ -218,6 +319,13 @@ def main(argv=None):
     p.add_argument("--newest", action="store_true",
                    help="take the newest pages instead of a sample across categories")
     p.add_argument("--seed", type=int, help="random seed for the sample")
+    p.add_argument("--fill", metavar="RESULTS",
+                   help="aim the --pages searches at occupations with too few postings in this results "
+                        "folder (its occupations.csv), searching their common O*NET titles")
+    p.add_argument("--onet-dir", default="data/cache/onet_29_3", help="O*NET text files, for --fill")
+    p.add_argument("--oews", default="data/cache/oesm24nat.zip", help="OEWS national file, for --fill")
+    p.add_argument("--title-counts", nargs="*", default=[], metavar="CSV",
+                   help="postings files whose titles decide which O*NET titles --fill searches first")
     p.add_argument("--out", required=True, help="CSV file to write")
     p.add_argument("--append", action="store_true",
                    help="add to an existing file, skipping postings already in it; use this to "
@@ -227,7 +335,17 @@ def main(argv=None):
         sys.exit("Set --app-id and --app-key (or ADZUNA_APP_ID / ADZUNA_APP_KEY). "
                  "Register free at https://developer.adzuna.com/")
 
-    if args.newest:
+    if args.fill:
+        employment, postings = _fill_inputs(args.fill, args.oews)
+        # Titles searched by earlier fills into this file, so a second run searches new ones.
+        log = Path(str(args.out) + ".fill-titles.txt")
+        searched = log.read_text().splitlines() if args.append and log.exists() else []
+        plan = fill_plan(employment, postings, read_titles(args.onet_dir, counts=title_counts(args.title_counts)),
+                         args.pages, searched=searched)
+        log.write_text("\n".join(searched + [t for _, t in plan]) + "\n")
+        print(f"Searching {len(plan)} titles across {len({s for s, _ in plan})} occupations")
+        rows = fill(args.app_id, args.app_key, plan, args.max_days_old)
+    elif args.newest:
         rows = fetch(args.app_id, args.app_key, args.pages, args.what, args.where, args.max_days_old)
     else:
         rows = sample(args.app_id, args.app_key, args.pages, args.what, args.where,

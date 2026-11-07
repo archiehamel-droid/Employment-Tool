@@ -181,6 +181,26 @@ default). `--newest` takes the newest pages instead, `--seed` makes a sample rep
 for postings that don't state one; those estimates are dropped. Adzuna descriptions are
 short snippets, so technology counts from them undercount.
 
+### Filling in under-covered jobs
+
+Job boards lean toward tech, office and federal work, so everyday jobs such as teachers,
+cooks, cashiers and bus drivers get far fewer postings than their share of employment.
+`--fill` points the `--pages` searches at those jobs instead of sampling:
+
+```bash
+python -m labor_jobs.adzuna --fill output/combined-2026-10 --title-counts data/linkedin/postings.csv \
+    --pages 240 --out data/adzuna/2026-10.csv --append
+```
+
+It reads the results folder's `occupations.csv`. For every occupation with at least 20,000
+workers (BLS OEWS), it sets the postings expected from its share of employment against the
+postings found. Each search is a title-only search, across the US, for one of the
+occupation's common titles from O*NET's sample of reported titles. The occupations with the
+biggest shortfall go first, and a few far-short ones get a second or third title. Titles
+are tried in order of how often they appear as posting titles in the `--title-counts`
+files (else those shown in My Next Move first). Each title is searched only once, so a
+generic one like "Teacher" goes to one occupation and the others use their next title.
+
 ## Looking ahead
 
 The program adds three forward-looking pieces:

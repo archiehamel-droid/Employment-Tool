@@ -69,7 +69,7 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
     cols = ["soc_code", "occ_title", "postings", "tot_emp", "demand_index", "median_posted_salary", "salary_samples",
             "a_median", "h1b_median_wage", "perm_median_wage", "proj_growth_pct", "proj_annual_openings",
             "typical_education", "job_zone"]
-    o = o.dropna(subset=["occ_title"]).sort_values("postings", ascending=False).head(300)
+    o = o.dropna(subset=["occ_title"]).sort_values("postings", ascending=False)
     o["median_posted_salary"] = o["median_posted_salary"].where(o["salary_samples"] >= 20)
     _save(out, "occupations", _clean(o[[c for c in cols if c in o]]))
 

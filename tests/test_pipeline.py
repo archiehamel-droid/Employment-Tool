@@ -1128,3 +1128,31 @@ def test_industries_employing_each_job():
     assert I.jolts_industry("113") == "Mining and logging" and I.jolts_industry("999") == "Government"
     assert I.short_title("Federal, State, and Local Government, excluding X (OEWS Designation)") == \
         "Government (federal, state and local)"
+
+
+def test_adzuna_fill_plan_targets_shortfalls(tmp_path):
+    from labor_jobs import adzuna
+    (tmp_path / "Sample of Reported Titles.txt").write_text(
+        "O*NET-SOC Code\tReported Job Title\tShown in My Next Move\n"
+        "25-2021.00\tClassroom Teacher\tY\n25-2021.00\tTeacher\tN\n"
+        "25-2031.00\tTeacher\tY\n25-2031.00\tScience Teacher (HS)\tN\n"
+        "15-1252.00\tSoftware Engineer\tY\n35-2014.00\tLine Cook\tY\n")
+    titles = adzuna.read_titles(tmp_path, counts={"teacher": 50})
+    assert titles["25-2021"][0] == "Teacher"          # the title employers use most comes first
+    assert titles["25-2031"] == ["Teacher", "Science Teacher"]
+    employment = {"25-2021": 1_000_000, "25-2031": 1_000_000, "15-1252": 1_000_000, "35-2014": 10_000}
+    postings = {"25-2021": 10, "25-2031": 20, "15-1252": 5000}
+    plan = adzuna.fill_plan(employment, postings, titles, calls=5)
+    # Software developers are over-posted and line cooks too small to count; each title is searched once.
+    assert plan == [("25-2021", "Teacher"), ("25-2031", "Science Teacher"), ("25-2021", "Classroom Teacher")]
+
+
+def test_one_word_job_at_the_end_of_a_title():
+    ref = pd.DataFrame({"title": ["Cashier", "Electrician", "Architect", "Cashier Supervisor"],
+                        "onet_code": ["41-2011.00", "47-2111.00", "17-1011.00", "41-1011.00"]})
+    m = TitleMatcher(ref)
+    out = m.map_titles(pd.Series(["Subway Cashier", "Gift Shop Cashier - PRN / Days", "Residential Electrician",
+                                  "Solutions Architect", "Cashier Supervisor"]))
+    assert out["onet_code"].tolist()[:3] == ["41-2011.00"] * 2 + ["47-2111.00"]
+    assert pd.isna(out["onet_code"].iloc[3])          # "architect" alone is too broad to trust
+    assert out["onet_code"].iloc[4] == "41-1011.00"

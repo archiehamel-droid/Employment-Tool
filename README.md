@@ -395,7 +395,7 @@ LinkedIn postings have full descriptions.
 ## Dashboard
 
 The Job Market Monitor dashboard shows a run's results in tabs: Overview, Occupations,
-Places, Outlook and Resume check. To build its data files from a run's output folder:
+Outlook and Resume check. To build its data files from a run's output folder:
 
 ```
 python -m labor_jobs.dashboard --results output/combined-2026-10 --out output/dashboard

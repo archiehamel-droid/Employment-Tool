@@ -4,7 +4,7 @@ main run's output:
     python -m labor_jobs.dashboard --results output/combined-2026-10 --out output/dashboard
 
 Each file is a JSON array of rows. Summary tables feed the Overview,
-Occupations, Places and Outlook tabs; the Resume check tab, which matches a
+Occupations and Outlook tabs; the Resume check tab, which matches a
 resume in the reader's browser, gets the postings split by occupation group
 (so a page downloads only the groups that fit), occupation profiles, each
 occupation's task wording (for comparing a resume's duties) and its
@@ -43,7 +43,7 @@ def _save(out, name, rows):
 
 
 def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
-    """The Overview, Occupations, Places and Outlook tables."""
+    """The Overview, Occupations and Outlook tables, and the states list."""
     results = Path(results)
     cov = json.loads((results / "coverage.json").read_text())
     methods = cov["matched_by_method"]
@@ -80,14 +80,8 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
                             "jolts_openings_forecast": "openings_forecast"})
     keep = ["state", "state_name", "postings", "total_employment", "per_1k", "median_posted_salary",
             "unemployment_rate", "openings_month", "openings", "forecast_month", "openings_forecast"]
+    # Feeds the Resume check tab's state filter.
     _save(out, "states", _clean(st[[c for c in keep if c in st]].sort_values("postings", ascending=False)))
-
-    if (results / "metros.csv").exists():
-        m = pd.read_csv(results / "metros.csv", dtype={"cbsa": str}).head(60)
-        _save(out, "metros", _clean(m[["cbsa", "metro_name", "postings", "total_employment", "postings_per_1k_employed",
-                                       "median_posted_salary", "oews_median_wage_all_occupations"]]
-                                    .rename(columns={"postings_per_1k_employed": "per_1k",
-                                                     "oews_median_wage_all_occupations": "bls_median_all"})))
 
     if (results / "jolts_forecast.csv").exists():
         fc = pd.read_csv(results / "jolts_forecast.csv")

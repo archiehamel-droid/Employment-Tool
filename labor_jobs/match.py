@@ -183,7 +183,47 @@ def requirement_adjustments(occ, profile):
     return factor, why
 
 
-def score_occupations(detailed, profile, major_socs):
+# What to rank occupations by, and how much (any scale; only the ratios matter).
+RANK_BY = {"resume": 100, "personality": 40, "salary": 0, "outlook": 0}
+RANK_PRESETS = {
+    "balanced": {"resume": 100, "personality": 40, "salary": 30, "outlook": 20},
+    "resume": {"resume": 100, "personality": 0, "salary": 0, "outlook": 0},
+    "personality": {"resume": 20, "personality": 100, "salary": 0, "outlook": 0},
+    "pay": {"resume": 50, "personality": 10, "salary": 100, "outlook": 0},
+    "outlook": {"resume": 50, "personality": 10, "salary": 0, "outlook": 100},
+}
+RESUME_SIGNALS = ("title", "duties", "major", "skills", "credentials")
+MARKET_GATE = 0.4
+
+
+def _rank_pct(values):
+    """{key: 0-1 percentile} of the numbers given, ignoring blanks."""
+    s = pd.Series(values, dtype=float).dropna()
+    return s.rank(pct=True).to_dict() if len(s) else {}
+
+
+def market_scores(detailed):
+    """Per O*NET code: (pay, salary score 0-1, growth %, outlook score 0-1).
+    Pay is the BLS median wage, else the posted median when 20+ postings state
+    one. Outlook mixes BLS projected 10-year growth (60%) and annual openings
+    (40%), both ranked across occupations."""
+    pay, growth, openings = {}, {}, {}
+    for occ in detailed.itertuples(index=False):
+        bls = _value(occ, "bls_median_wage")
+        posted = _value(occ, "median_posted_salary") if (_value(occ, "salary_samples") or 0) >= 20 else None
+        pay[occ.onet_code] = bls if bls else posted
+        growth[occ.onet_code] = _value(occ, "proj_growth_pct")
+        openings[occ.onet_code] = _value(occ, "proj_annual_openings")
+    pay_pct, growth_pct, open_pct = _rank_pct(pay), _rank_pct(growth), _rank_pct(openings)
+    out = {}
+    for code in pay:
+        g, o = growth_pct.get(code), open_pct.get(code)
+        outlook = (0.6 * g + 0.4 * o) if g is not None and o is not None else g if g is not None else o
+        out[code] = (pay[code], pay_pct.get(code), growth[code], outlook)
+    return out
+
+
+def score_occupations(detailed, profile, major_socs, rank_by=None, requirements=True):
     """Fit score 0-1 per occupation in the results, with the reasons. Four signals:
     title    a job title on the resume names the occupation; the first (latest)
              counts fully, earlier ones a little less
@@ -199,7 +239,13 @@ def score_occupations(detailed, profile, major_socs):
     (Holland/RIASEC), work styles (Big Five, blended with the soft skills its
     postings ask for) and, weakly, Myers-Briggs. Then requirement_adjustments
     lowers occupations whose jobs mostly need more education, experience or a
-    license than the resume shows."""
+    license than the resume shows.
+
+    The resume signals average into resume_fit, the test signals into
+    personality_fit; fit_score weighs those with salary_score and
+    outlook_score (market_scores) by rank_by (RANK_BY by default), counting
+    only what is known for each occupation. requirements=False skips the
+    requirement adjustment."""
     held = list(profile["titles"].items())
     recency = {code: max(0.6, 1 - 0.2 * i) for i, (code, _) in enumerate(held)}
     held_socs = {}
@@ -235,7 +281,9 @@ def score_occupations(detailed, profile, major_socs):
                                       ("major", bool(major_socs)), ("skills", bool(resume_tech)),
                                       ("credentials", bool(held_credentials))) if present]
     available += trait_keys
-    if not available:
+    rank_by = {**RANK_BY, **(rank_by or {})}
+    market = market_scores(detailed)
+    if not available and not (rank_by["salary"] or rank_by["outlook"]):
         return detailed.iloc[0:0].assign(fit_score=[], why=[], skills_to_add=[])
     rows = []
     for occ in detailed.itertuples(index=False):
@@ -276,15 +324,42 @@ def score_occupations(detailed, profile, major_socs):
             why.append(f"interests match ({trait['holland']})")
         if trait["signals"].get("styles", 0) >= 0.7:
             why.append("personality suits its work styles")
-        fit = sum(WEIGHTS[k] * signals[k] for k in scored) / sum(WEIGHTS[k] for k in scored)
-        factor, reasons = requirement_adjustments(occ, profile)
-        fit *= factor
-        why += reasons
+
+        def average(keys):
+            keys = [k for k in scored if k in keys]
+            return sum(WEIGHTS[k] * signals[k] for k in keys) / sum(WEIGHTS[k] for k in keys) if keys else None
+        resume_fit = average(RESUME_SIGNALS)
+        personality_fit = average(trait_keys)
+        pay, salary_score, growth, outlook_score = market.get(occ.onet_code, (None, None, None, None))
+        parts = {"resume": resume_fit, "personality": personality_fit, "salary": salary_score,
+                 "outlook": outlook_score}
+        used = {k: v for k, v in parts.items() if v is not None and rank_by[k] > 0}
+        # Pay and outlook count for occupations the person fits: fully from a
+        # fit of MARKET_GATE up, proportionally below (none at all only when
+        # there's nothing personal to rank by).
+        personal = [v for k, v in used.items() if k in ("resume", "personality")]
+        if personal:
+            gate = min(1.0, max(personal) / MARKET_GATE)
+            used = {k: v * gate if k in ("salary", "outlook") else v for k, v in used.items()}
+        fit = sum(rank_by[k] * v for k, v in used.items()) / sum(rank_by[k] for k in used) if used else 0.0
+        if rank_by["salary"] and salary_score is not None and salary_score >= 0.75:
+            why.append(f"pays well: median ${pay:,.0f}, above {salary_score:.0%} of occupations")
+        if rank_by["outlook"] and outlook_score is not None and outlook_score >= 0.75 and growth is not None:
+            why.append(f"strong outlook: {growth:+.1f}% projected growth")
+        if requirements:
+            factor, reasons = requirement_adjustments(occ, profile)
+            fit *= factor
+            why += reasons
         missing = sorted(_tech_names(getattr(occ, "posting_technologies", None)) - resume_tech)
         rows.append({"onet_code": occ.onet_code, "fit_score": round(fit, 3),
+                     "resume_fit": None if resume_fit is None else round(resume_fit, 3),
+                     "personality_fit": None if personality_fit is None else round(personality_fit, 3),
+                     "pay": pay, "salary_score": None if salary_score is None else round(salary_score, 3),
+                     "outlook_score": None if outlook_score is None else round(outlook_score, 3),
                      "why": "; ".join(why), "skills_to_add": ", ".join(missing[:6]),
                      "holland_code": trait.get("holland"), "reasoning_demand": trait.get("reasoning")})
-    scores = pd.DataFrame(rows, columns=["onet_code", "fit_score", "why", "skills_to_add", "holland_code",
+    scores = pd.DataFrame(rows, columns=["onet_code", "fit_score", "resume_fit", "personality_fit", "pay",
+                                         "salary_score", "outlook_score", "why", "skills_to_add", "holland_code",
                                          "reasoning_demand"])
     out = detailed.merge(scores, on="onet_code")
     out = out[out["fit_score"] > 0]
@@ -338,7 +413,11 @@ RATING_BONUS = {"Strong match": 0.3, "Partial match": 0.15, "Stretch": 0.0}
 
 
 def rank_postings(postings, occupations, profile, top_occupations, states=None, metro=None,
-                  metro_names=None, min_salary=None):
+                  metro_names=None, min_salary=None, rank_by=None, sort="match"):
+    """Postings in the best-fitting occupations, checked against the resume.
+    sort="match" orders them by fit, title relevance, skills and rating, plus
+    their own salary (ranked among these postings) in proportion to the salary
+    weight in rank_by; sort="salary" puts the highest advertised pay first."""
     best = occupations.head(top_occupations)
     fit = dict(zip(best["onet_code"], best["fit_score"]))
     names = dict(zip(best["onet_code"], best["onet_title"]))
@@ -367,7 +446,12 @@ def rank_postings(postings, occupations, profile, top_occupations, states=None, 
               for i, row in zip(df.index, df.itertuples(index=False))]
     df = df.join(pd.DataFrame(checks, index=df.index))
     df["rank_score"] = df["match_score"] + df["rating"].map(RATING_BONUS).fillna(0)
-    return df.sort_values(["rank_score", "annual_salary"], ascending=[False, False]).drop(columns="rank_score")
+    weights = {**RANK_BY, **(rank_by or {})}
+    share = weights["salary"] / (sum(weights.values()) or 1)
+    if share and len(df):
+        df["rank_score"] += 2 * share * df["annual_salary"].rank(pct=True).fillna(0)
+    order = ["annual_salary", "rank_score"] if sort == "salary" else ["rank_score", "annual_salary"]
+    return df.sort_values(order, ascending=[False, False], na_position="last").drop(columns="rank_score")
 
 
 RATINGS = ("Strong match", "Partial match", "Stretch")
@@ -523,6 +607,7 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
                   "median_posted_salary": "Posted median $", "bls_median_wage": "BLS median $",
                   "proj_growth_pct": "Growth % (10 yr)", "typical_education": "Typical education",
                   "why": "Why", "skills_to_add": "Skills in postings not on resume",
+                  "pay": "Median pay $",
                   "employers_ask": "Employers often ask for",
                   **({"holland_code": "Holland code", "reasoning_demand": "Reasoning demand"} if tests else {})}),
               "",
@@ -559,6 +644,22 @@ def build_report(profile, major_text, major_hits, occupations, postings, results
                       table(gaps, {"technology": "Technology", "postings": "Postings listing it"}),
                       ""]
     return "\n".join(lines)
+
+
+def parse_rank_by(text):
+    """A preset name or "resume=50,salary=100" -> weights for all four parts
+    (any not given count 0 when weights are given)."""
+    text = (text or "").strip().lower()
+    if text in RANK_PRESETS:
+        return dict(RANK_PRESETS[text])
+    weights = dict.fromkeys(RANK_BY, 0.0)
+    for key, value in re.findall(r"([a-z]+)\s*[=:]\s*(\d+(?:\.\d+)?)", text):
+        if key not in weights:
+            raise SystemExit(f"--rank-by: unknown part {key!r}; use resume, personality, salary or outlook")
+        weights[key] = float(value)
+    if not any(weights.values()):
+        raise SystemExit("--rank-by: give a preset or at least one weight above 0")
+    return weights
 
 
 def _pairs(text):
@@ -605,6 +706,13 @@ def main(argv=None):
     p.add_argument("--mbti", help="Myers-Briggs type, e.g. INTJ (weak evidence; used lightly)")
     p.add_argument("--iq", type=int, help="IQ or cognitive score (shown against each job's reasoning demand; "
                                           "never changes the ranking)")
+    p.add_argument("--rank-by", default="resume=100,personality=40",
+                   help='what to rank occupations by and how much: a preset (' + ", ".join(RANK_PRESETS) +
+                        ') or weights like "resume=50,personality=20,salary=100,outlook=30"')
+    p.add_argument("--ignore-requirements", action="store_true",
+                   help="don't lower occupations whose jobs mostly need more education, experience or a license")
+    p.add_argument("--sort-postings", choices=["match", "salary"], default="match",
+                   help="order postings by best match (default) or highest advertised salary")
     p.add_argument("--top", type=int, default=15, help="occupations to show (default 15)")
     p.add_argument("--out", help="folder for the match files (default: <results>/matches)")
     p.add_argument("--cache", default="data/cache")
@@ -670,9 +778,10 @@ def main(argv=None):
         traits = personality.occupation_traits(args.onet_version, args.cache, user_agent, args.onet_dir)
         traits = personality.blend_posting_traits(traits, detailed)
         profile["traits"] = personality.trait_signals(tests, traits[traits["onet_code"].isin(detailed["onet_code"])])
-    occupations = score_occupations(detailed, profile, major_socs)
+    rank_by = parse_rank_by(args.rank_by)
+    occupations = score_occupations(detailed, profile, major_socs, rank_by, not args.ignore_requirements)
     ranked = rank_postings(postings, occupations, profile, args.top, args.state, args.metro,
-                           metro_names, args.min_salary)
+                           metro_names, args.min_salary, rank_by, args.sort_postings)
     occupations.to_csv(out / "matching_occupations.csv", index=False)
     ranked.drop(columns=[c for c in ("description",) if c in ranked]).to_csv(
         out / "matching_postings.csv", index=False)

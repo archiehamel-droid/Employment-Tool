@@ -1089,3 +1089,24 @@ def test_requirements_and_credentials_shape_the_fit():
     assert checks["credentials_check"] == "close"  # ACLS is a certification, not a license
     assert checks["credentials_detail"] == "requires Registered nurse (RN) license, ACLS/PALS; not on resume: ACLS/PALS"
     assert checks["experience_detail"] == "~1.5+ yrs typical for the occupation; resume shows 3"
+
+
+def test_rank_by_settings():
+    from labor_jobs import match
+    detailed = pd.DataFrame({
+        "onet_code": ["15-2051.00", "15-1252.00", "43-9061.00"], "soc_code": ["15-2051", "15-1252", "43-9061"],
+        "onet_title": ["Data Scientists", "Software Developers", "Office Clerks"], "postings": [5, 9, 3],
+        "posting_technologies": ["Python 60%, SQL 50%", "Java 40%", None], "onet_hot_technologies": [None] * 3,
+        "typical_education": ["Bachelor's degree", "Bachelor's degree", "High school diploma or equivalent"],
+        "bls_median_wage": [112000, 133000, 41000], "salary_samples": [0, 0, 0], "median_posted_salary": [None] * 3,
+        "proj_growth_pct": [34.0, 15.0, -3.0], "proj_annual_openings": [20000, 140000, 300000]})
+    profile = {"titles": {"15-2051.00": "Data Analyst"}, "technologies": ["Python", "SQL"], "education_level": 3}
+    by_resume = match.score_occupations(detailed, profile, None)
+    assert by_resume["onet_code"].iloc[0] == "15-2051.00"
+    assert by_resume.set_index("onet_code").loc["15-2051.00", "fit_score"] == \
+        by_resume.set_index("onet_code").loc["15-2051.00", "resume_fit"]  # only the resume counts by default
+    by_pay = match.score_occupations(detailed, profile, None, {"resume": 0, "personality": 0, "salary": 1, "outlook": 0})
+    assert by_pay["onet_code"].tolist() == ["15-1252.00", "15-2051.00", "43-9061.00"]
+    assert "pays well: median $133,000" in by_pay.set_index("onet_code").loc["15-1252.00", "why"]
+    assert match.parse_rank_by("pay") == match.RANK_PRESETS["pay"]
+    assert match.parse_rank_by("salary=100, outlook=50") == {"resume": 0, "personality": 0, "salary": 100, "outlook": 50}

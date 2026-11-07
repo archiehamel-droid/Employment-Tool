@@ -255,6 +255,41 @@ It writes `matches.md`, `matching_occupations.csv` and `matching_postings.csv` t
   and `--min-salary`. The occupation table also lists technologies common in that
   occupation's postings that the resume doesn't mention.
 
+### What employers ask for
+
+Three sources say what employers screen for, and feed both the occupation fit and the
+posting checks:
+
+- **Posting text** (`labor_jobs/posting_requirements.py`): each posting's required and
+  preferred licenses, certifications and clearances (RN license, CDL, CPA, bar admission,
+  PMP, Security+, security clearance and about 40 more), and the soft skills it asks for
+  (communication, attention to detail, teamwork...). Shares per occupation count only
+  full descriptions: company job boards and USAJOBS, not Adzuna's 500-character snippets.
+  For USAJOBS, `python -m labor_jobs.usajobs --add-text FILE` (or `--text` when
+  fetching) adds each announcement's duties, qualifications, education requirements,
+  conditions of employment and how applicants are evaluated, from the same keyless API.
+- **BLS Occupational Requirements Survey (ORS)**: employers report each job's minimum
+  education, required prior experience and licensing (about 250 occupations).
+- **O*NET Education, Training, and Experience**: the share of workers saying each
+  education level and amount of experience is needed to get hired, for every occupation.
+  It fills in where ORS has no figures.
+
+`detailed_occupations.csv` gains the education shares (`edu_0`–`edu_5`, high school or
+less through doctoral), `exp_pct` and `exp_years`, `license_pct`, and the credentials and
+soft skills most often asked for. Matching uses them:
+
+- licenses and certifications on a resume count toward occupations whose postings
+  require them, weighted by how specific they are (a bar admission far more than CPR)
+- the degree adjustment scales with the share of jobs needing more education than the
+  resume shows
+- less experience than most jobs ask for, or lacking a license most jobs require (other
+  than quick-to-get ones like a driver's license, CPR or food-safety card), lowers the fit,
+  with the reason given
+- each posting gets a credentials check, and postings that state no years are checked
+  against the occupation's typical experience
+- Big Five results are compared with the soft skills postings ask for as well as O*NET's
+  work styles
+
 ### Interest and personality tests
 
 Test results can add to a resume, or stand in for one:

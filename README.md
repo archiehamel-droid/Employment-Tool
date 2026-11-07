@@ -193,13 +193,26 @@ python -m labor_jobs.adzuna --fill output/combined-2026-10 --title-counts data/l
 ```
 
 It reads the results folder's `occupations.csv`. For every occupation with at least 20,000
-workers (BLS OEWS), it sets the postings expected from its share of employment against the
-postings found. Each search is a title-only search, across the US, for one of the
-occupation's common titles from O*NET's sample of reported titles. The occupations with the
-biggest shortfall go first, and a few far-short ones get a second or third title. Titles
-are tried in order of how often they appear as posting titles in the `--title-counts`
-files (else those shown in My Next Move first). Each title is searched only once, so a
-generic one like "Teacher" goes to one occupation and the others use their next title.
+workers (BLS OEWS), it compares the postings found with the postings expected from its share
+of employment. Searches go to the occupations with a shortfall, in proportion to how far
+short each is (at most 10 per occupation per run). Each is a title-only search across the
+US for one of the occupation's common titles from O*NET's sample of reported titles:
+- **Which titles.** Titles are tried in order of how often they appear as posting titles in
+  the `--title-counts` files (else those shown in My Next Move first).
+- **Titles left out.** A title is dropped when this month's postings with it were matched to
+  another occupation. O*NET lists "Sales Associate" for cashiers, but those postings count as
+  retail salespersons, so searching it adds no cashiers.
+- **Shared titles.** A generic title like "Teacher" is searched only for the furthest-short
+  occupation that lists it.
+- **More searches for far-short jobs.** These go through deeper pages of the best titles
+  before moving to the next title: page 1 of the first title, then its page 2 or the second
+  title, and so on.
+- **Off-topic results.** Adzuna's default ranking sometimes puts unrelated ads first: a
+  "Cashier" search led with warehouse jobs. When fewer than half the results carry the title,
+  the page is fetched again sorted by date, which stays on the title.
+
+Every search is logged next to the output file (`2026-10.csv.fill-titles.txt`), so another
+`--fill --append` run with fresh results searches new titles and pages.
 
 ## Looking ahead
 

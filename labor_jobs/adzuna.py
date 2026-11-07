@@ -222,12 +222,16 @@ def title_counts(paths, column="title"):
     return counts
 
 
-def read_titles(onet_dir, per_occupation=6, counts=None):
+def read_titles(onet_dir, per_occupation=6, counts=None, mapped=None):
     """Common job titles for each SOC occupation, from O*NET's sample of
     reported titles, as search terms: the ones most often seen as posting
-    titles in `counts` first, then those shown in My Next Move."""
+    titles in `counts` first, then those shown in My Next Move. `mapped`
+    (lowercased posting title -> the SOC code its postings were matched to)
+    drops titles whose postings count toward another occupation: O*NET lists
+    "Sales Associate" for cashiers, but those postings go to retail salespersons."""
     path = Path(onet_dir) / "Sample of Reported Titles.txt"
     counts = counts or {}
+    mapped = mapped or {}
     titles = {}
 
     def clean(row):
@@ -239,17 +243,22 @@ def read_titles(onet_dir, per_occupation=6, counts=None):
     for row in rows:
         title = clean(row)
         soc = row["O*NET-SOC Code"][:7]
+        if mapped.get(title.lower(), soc) != soc:
+            continue
         if title and title not in titles.setdefault(soc, []) and len(titles[soc]) < per_occupation:
             titles[soc].append(title)
     return titles
 
 
-def fill_plan(employment, postings, titles, calls, min_employment=20000, max_calls=4, searched=()):
+def fill_plan(employment, postings, titles, calls, min_employment=20000, max_calls=10, max_page=5, searched=()):
     """Searches aimed at the occupations with the biggest shortfall of postings:
     each occupation's expected postings is its share of employment times the
-    postings already matched, and calls go to the largest shortfalls, a few
-    per occupation, each a different common title, skipping titles in
-    `searched` (an earlier fill's). Returns (soc, title) pairs."""
+    postings already matched, and calls go to the largest shortfalls. An
+    occupation's searches run through its common titles and deeper pages of
+    the best ones (first title page 1, then page 2 or the second title, and so
+    on), with calls in proportion to how far short it is, skipping searches in
+    `searched` (an earlier fill's, as "title" for page 1 or "title#page").
+    Returns (soc, title, page) triples."""
     total = sum(postings.values())
     emp_total = sum(employment.values())
     gap = {}
@@ -259,41 +268,93 @@ def fill_plan(employment, postings, titles, calls, min_employment=20000, max_cal
             short = expected - postings.get(soc, 0)
             if short > 0:
                 gap[soc] = short
-    plan, used, round_ = [], {t.lower() for t in searched}, 0
+    used = {t.lower() for t in searched}
+    # Each title belongs to the first (furthest short) occupation that takes it, so a
+    # generic one ("Teacher") shared by several is searched for one of them only.
+    owner = {}
+    order = sorted(gap, key=gap.get, reverse=True)
+    for soc in order:
+        for t in titles[soc]:
+            owner.setdefault(t.lower(), soc)
+    candidates = {}
+    for soc in order:
+        mine = [t for t in titles[soc] if owner[t.lower()] == soc]
+        pairs = sorted(((i, page) for i in range(len(mine)) for page in range(1, max_page + 1)),
+                       key=lambda ip: (ip[0] + ip[1], ip[0]))
+        candidates[soc] = iter([(mine[i], page) for i, page in pairs])
+    # Calls in proportion to each shortfall (at most max_calls each); calls left by
+    # rounding down go one each to the largest remainders.
+    total_gap = sum(gap.values()) or 1
+    share = {soc: calls * gap[soc] / total_gap for soc in order}
+    quota = {soc: min(max_calls, math.floor(share[soc])) for soc in order}
+    for soc in sorted(order, key=lambda c: share[c] - math.floor(share[c]), reverse=True):
+        if sum(quota.values()) >= calls:
+            break
+        if quota[soc] < max_calls:
+            quota[soc] += 1
+    plan, round_ = [], 0
     while len(plan) < calls and round_ < max_calls:
-        for soc in sorted(gap, key=gap.get, reverse=True):
+        for soc in order:
             if len(plan) >= calls:
                 break
-            # A further round only for occupations still far short (100+ missing per extra call).
-            if round_ and gap[soc] < 100 * round_:
+            if round_ >= quota[soc]:
                 continue
-            # Each title is searched once: a generic one ("Teacher") shared by
-            # several occupations goes to the first, the others take their next title.
-            title = next((t for t in titles[soc] if t.lower() not in used), None)
-            if title:
-                used.add(title.lower())
-                plan.append((soc, title))
+            for title, page in candidates[soc]:
+                key = title.lower() if page == 1 else f"{title.lower()}#{page}"
+                if key not in used:
+                    used.add(key)
+                    plan.append((soc, title, page))
+                    break
         round_ += 1
     return plan
 
 
+def _on_topic(results, title):
+    """Share of results whose title has the searched title's last word."""
+    head = title.lower().split()[-1]
+    return sum(head in (r.get("title") or "").lower() for r in results) / len(results) if results else 1.0
+
+
 def fill(app_id, app_key, plan, max_days_old=31, per_page=50, pause=2.5, session=None):
-    """Yield postings rows for each (soc, title) in the plan: the first page of
-    a title-only search for that title across the US."""
+    """Yield postings rows for each (soc, title, page) in the plan: that page of a
+    title-only search for the title across the US. Adzuna's default ranking
+    sometimes floats unrelated ads to the top (a "Cashier" search led with
+    warehouse jobs), so when under half the results carry the title the page is
+    fetched again sorted by date, which keeps to the title."""
     session = session or requests.Session()
-    for i, (soc, title) in enumerate(plan, 1):
+    for i, (soc, title, page) in enumerate(plan, 1):
         try:
-            body = search(session, app_id, app_key, 1, per_page, title_only=title,
+            body = search(session, app_id, app_key, page, per_page, title_only=title,
                           max_days_old=max_days_old)
+            results = body.get("results", [])
+            if _on_topic(results, title) < 0.5:
+                time.sleep(pause)
+                dated = search(session, app_id, app_key, page, per_page, title_only=title,
+                               max_days_old=max_days_old, sort_by="date").get("results", [])
+                if _on_topic(dated, title) > _on_topic(results, title):
+                    results = dated
         except PageFailed as exc:
-            print(f"  skipped {title}: {exc}")
+            print(f"  skipped {title} page {page}: {exc}")
             continue
-        results = body.get("results", [])
         if i % 25 == 0 or i == len(plan):
-            print(f"  {i}/{len(plan)} searches; last: {title} ({soc}), {len(results)} postings")
+            print(f"  {i}/{len(plan)} searches; last: {title} p{page} ({soc}), {len(results)} postings")
         for result in results:
             yield to_row(result)
         time.sleep(pause)
+
+
+def mapped_titles(results):
+    """Each posting title in a results folder's postings_with_soc.csv, lowercased,
+    with the SOC code most of its postings were matched to."""
+    votes = {}
+    csv.field_size_limit(sys.maxsize)
+    with (Path(results) / "postings_with_soc.csv").open(newline="", encoding="utf-8", errors="replace") as f:
+        for row in csv.DictReader(f):
+            title, soc = (row.get("title") or "").strip().lower(), row.get("soc_code")
+            if title and soc:
+                votes.setdefault(title, {}).setdefault(soc, 0)
+                votes[title][soc] += 1
+    return {t: max(v, key=v.get) for t, v in votes.items()}
 
 
 def _fill_inputs(results, oews_nat):
@@ -340,10 +401,10 @@ def main(argv=None):
         # Titles searched by earlier fills into this file, so a second run searches new ones.
         log = Path(str(args.out) + ".fill-titles.txt")
         searched = log.read_text().splitlines() if args.append and log.exists() else []
-        plan = fill_plan(employment, postings, read_titles(args.onet_dir, counts=title_counts(args.title_counts)),
-                         args.pages, searched=searched)
-        log.write_text("\n".join(searched + [t for _, t in plan]) + "\n")
-        print(f"Searching {len(plan)} titles across {len({s for s, _ in plan})} occupations")
+        titles = read_titles(args.onet_dir, counts=title_counts(args.title_counts), mapped=mapped_titles(args.fill))
+        plan = fill_plan(employment, postings, titles, args.pages, searched=searched)
+        log.write_text("\n".join(searched + [t if p == 1 else f"{t}#{p}" for _, t, p in plan]) + "\n")
+        print(f"Searching {len(plan)} pages across {len({s for s, _, _ in plan})} occupations")
         rows = fill(args.app_id, args.app_key, plan, args.max_days_old)
     elif args.newest:
         rows = fetch(args.app_id, args.app_key, args.pages, args.what, args.where, args.max_days_old)

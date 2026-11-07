@@ -211,6 +211,19 @@ The program adds three forward-looking pieces:
    Industries in JOLTS don't line up one-to-one with occupations, so the openings forecast
    is reported by industry and state, not by occupation.
 
+### Outlook by industry or job
+
+The dashboard's Outlook tab views the outlook either way:
+
+- **By industry**: pick any of the 16 JOLTS industries (or total nonfarm) to see its
+  openings since 2023, the six-month forecast with its 80% range, and how the forecast
+  did against assuming no change over the past two years (`jolts_series.json`).
+- **By job**: search or pick any of the 831 occupations BLS projects to see its growth
+  to 2035 against all jobs, openings a year, employment now and projected, median wage,
+  typical education, related experience and training, and this month's postings and
+  demand index, plus how its growth compares with related jobs
+  (`occupation_outlook.json`, from `projections.read_outlook`).
+
 ## Matching jobs to a resume or major
 
 After a main run, `labor_jobs.match` finds the occupations and postings in its results that

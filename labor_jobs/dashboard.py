@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import bls, h1b, jolts, majors, occupation_text, personality, posting_requirements, skills
+from . import bls, h1b, jolts, majors, occupation_text, personality, posting_requirements, projections, skills
 from .matching import build_matcher
 from .soc_mapping import load_onet_titles, load_title_overrides
 
@@ -42,7 +42,7 @@ def _save(out, name, rows):
     return path
 
 
-def summary_tables(results, out, user_agent, api_key):
+def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
     """The Overview, Occupations, Places and Outlook tables."""
     results = Path(results)
     cov = json.loads((results / "coverage.json").read_text())
@@ -111,6 +111,28 @@ def summary_tables(results, out, user_agent, api_key):
         rows += [{"month": r.month, "kind": "forecast", "openings": round(r.forecast * 1000),
                   "lower": round(r.lower_80 * 1000), "upper": round(r.upper_80 * 1000)} for r in nat.itertuples()]
         _save(out, "jolts_national", rows)
+
+        # Every industry's openings history and forecast, for the Outlook tab's picker.
+        industry = fc[fc["group"] == "industry"]
+        ids = industry["series_id"].unique().tolist()
+        history = bls.fetch_series(ids, last_year - 4, last_year, user_agent, api_key)
+        history = history[history.month >= f"{last_year - 3}-01"]
+        names = dict(zip(industry["series_id"], industry["name"]))
+        series_rows = [{"industry": names[r.series_id], "month": r.month, "kind": "actual",
+                        "openings": round(r.value * 1000), "lower": None, "upper": None}
+                       for r in history.itertuples() if r.series_id in names]
+        series_rows += [{"industry": r.name, "month": r.month, "kind": "forecast", "openings": round(r.forecast * 1000),
+                         "lower": round(r.lower_80 * 1000), "upper": round(r.upper_80 * 1000)}
+                        for r in industry.itertuples()]
+        _save(out, "jolts_series", series_rows)
+
+    # Every occupation's ten-year outlook (BLS Employment Projections), with this month's postings.
+    outlook = projections.read_outlook(projections.projections_file(cache_dir, user_agent))
+    every = pd.read_csv(results / "occupations.csv", dtype={"soc_code": str})
+    every["median_posted_salary"] = every["median_posted_salary"].where(every["salary_samples"] >= 20)
+    posted = every.set_index("soc_code")[["postings", "demand_index", "median_posted_salary"]]
+    outlook = outlook.join(posted, on="soc_code")
+    _save(out, "occupation_outlook", _clean(outlook))
 
     d = pd.read_csv(results / "detailed_occupations.csv", dtype={"onet_code": str, "soc_code": str})
     sp = d[d.specialized & (d.postings >= 5)].sort_values("postings", ascending=False).head(40)
@@ -200,7 +222,7 @@ def main(argv=None):
     Path(args.out).mkdir(parents=True, exist_ok=True)
     user_agent = f"labor-jobs/1.0 ({args.contact_email})" if args.contact_email else "labor-jobs/1.0"
     print("Summary tables:")
-    detailed = summary_tables(args.results, args.out, user_agent, args.bls_api_key)
+    detailed = summary_tables(args.results, args.out, user_agent, args.bls_api_key, args.cache)
     print("Resume check data:")
     groups = resume_tables(args.results, args.out, detailed, args.cache, user_agent, args.onet_version, args.h1b_year)
     print(f"Postings in {len(groups)} occupation groups: {', '.join(groups)}")

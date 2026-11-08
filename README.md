@@ -189,7 +189,7 @@ cooks, cashiers and bus drivers get far fewer postings than their share of emplo
 
 ```bash
 python -m labor_jobs.adzuna --fill output/combined-2026-10 --title-counts data/linkedin/postings.csv \
-    --pages 240 --out data/adzuna/2026-10.csv --append
+    --pages 400 --out data/adzuna/2026-10.csv --append
 ```
 
 It reads the results folder's `occupations.csv`. For every occupation with at least 20,000
@@ -204,15 +204,21 @@ US for one of the occupation's common titles from O*NET's sample of reported tit
   retail salespersons, so searching it adds no cashiers.
 - **Shared titles.** A generic title like "Teacher" is searched only for the furthest-short
   occupation that lists it.
-- **More searches for far-short jobs.** These go through deeper pages of the best titles
-  before moving to the next title: page 1 of the first title, then its page 2 or the second
-  title, and so on.
 - **Off-topic results.** Adzuna's default ranking sometimes puts unrelated ads first: a
   "Cashier" search led with warehouse jobs. When fewer than half the results carry the title,
   the page is fetched again sorted by date, which stays on the title.
 
-Every search is logged next to the output file (`2026-10.csv.fill-titles.txt`), so another
-`--fill --append` run with fresh results searches new titles and pages.
+- **Small occupations.** A small occupation's shortfall is too small to earn a share of the
+  searches, so `--thin 10` (the default) first gives one search to every occupation with
+  fewer than 10 postings and at least 5,000 workers. The rest go by shortfall. `--thin 0`
+  turns this off.
+
+Searches go through deeper pages of an occupation's best title before its later titles:
+each later title counts as two pages deeper (up to page 10). That is why "Cashier" pages
+5 to 8 come before "Store Clerk". Each search is logged next to the output file
+(`2026-10.csv.fill-titles.txt`) as soon as it is done, so a run stopped by Adzuna's daily
+limit loses nothing. Another `--fill --append` run with fresh results then searches new
+titles and pages.
 
 ## Looking ahead
 

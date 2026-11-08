@@ -1146,11 +1146,16 @@ def test_adzuna_fill_plan_targets_shortfalls(tmp_path):
     # Software developers are over-posted and line cooks too small to count. "Teacher" goes to the furthest-short
     # occupation only; far-short ones get deeper pages of their best title before their next title.
     assert plan == [("25-2021", "Teacher", 1), ("25-2031", "Science Teacher", 1), ("25-2021", "Teacher", 2),
-                    ("25-2031", "Science Teacher", 2), ("25-2021", "Classroom Teacher", 1)]
+                    ("25-2031", "Science Teacher", 2), ("25-2021", "Teacher", 3)]
     # Searches an earlier fill made are skipped.
     again = adzuna.fill_plan(employment, postings, titles, calls=2, searched=["Teacher", "teacher#2", "Science Teacher"])
-    assert again == [("25-2021", "Classroom Teacher", 1), ("25-2031", "Science Teacher", 2)]
+    assert again == [("25-2021", "Teacher", 3), ("25-2031", "Science Teacher", 2)]
     assert adzuna._on_topic([{"title": "Warehouse Picker"}, {"title": "Store Cashier"}], "Cashier") == 0.5
+    # A small occupation with few postings is too little short to earn a share; --thin gives it one search first.
+    employment["35-2014"] = 30_000
+    assert all(soc != "35-2014" for soc, _, _ in adzuna.fill_plan(employment, postings, titles, calls=4))
+    first = adzuna.fill_plan(employment, postings, titles, calls=4, thin=10)
+    assert first[0] == ("35-2014", "Line Cook", 1) and len(first) == 4
 
 
 def test_one_word_job_at_the_end_of_a_title():

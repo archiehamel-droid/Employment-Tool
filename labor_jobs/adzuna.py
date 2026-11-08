@@ -250,14 +250,19 @@ def read_titles(onet_dir, per_occupation=6, counts=None, mapped=None):
     return titles
 
 
-def fill_plan(employment, postings, titles, calls, min_employment=20000, max_calls=10, max_page=5, searched=()):
+def fill_plan(employment, postings, titles, calls, min_employment=20000, max_calls=10, max_page=10, searched=(),
+              thin=0, thin_employment=5000):
     """Searches aimed at the occupations with the biggest shortfall of postings:
     each occupation's expected postings is its share of employment times the
     postings already matched, and calls go to the largest shortfalls. An
     occupation's searches run through its common titles and deeper pages of
     the best ones (first title page 1, then page 2 or the second title, and so
-    on), with calls in proportion to how far short it is, skipping searches in
+    on, a later title counting as two pages deeper), with calls in proportion
+    to how far short it is, skipping searches in
     `searched` (an earlier fill's, as "title" for page 1 or "title#page").
+    With `thin`, every occupation with fewer than that many postings (and at
+    least `thin_employment` workers) first gets one search of its own, since
+    a small occupation's shortfall is too small to earn a share of the calls.
     Returns (soc, title, page) triples."""
     total = sum(postings.values())
     emp_total = sum(employment.values())
@@ -273,15 +278,38 @@ def fill_plan(employment, postings, titles, calls, min_employment=20000, max_cal
     # generic one ("Teacher") shared by several is searched for one of them only.
     owner = {}
     order = sorted(gap, key=gap.get, reverse=True)
-    for soc in order:
+    thin_order = sorted((soc for soc, emp in employment.items()
+                         if thin and postings.get(soc, 0) < thin and emp >= thin_employment and titles.get(soc)),
+                        key=employment.get, reverse=True)
+    for soc in order + [c for c in thin_order if c not in gap]:
         for t in titles[soc]:
             owner.setdefault(t.lower(), soc)
     candidates = {}
-    for soc in order:
+    for soc in owner.values():
+        if soc in candidates:
+            continue
         mine = [t for t in titles[soc] if owner[t.lower()] == soc]
         pairs = sorted(((i, page) for i in range(len(mine)) for page in range(1, max_page + 1)),
-                       key=lambda ip: (ip[0] + ip[1], ip[0]))
+                       key=lambda ip: (2 * ip[0] + ip[1], ip[0]))
         candidates[soc] = iter([(mine[i], page) for i, page in pairs])
+    plan = []
+
+    def take(soc):
+        for title, page in candidates.get(soc, ()):
+            key = title.lower() if page == 1 else f"{title.lower()}#{page}"
+            if key not in used:
+                used.add(key)
+                plan.append((soc, title, page))
+                return True
+        return False
+
+    for soc in thin_order:
+        if len(plan) >= calls:
+            return plan
+        take(soc)
+    calls -= len(plan)
+    if not order or calls <= 0:
+        return plan
     # Calls in proportion to each shortfall (at most max_calls each); calls left by
     # rounding down go one each to the largest remainders.
     total_gap = sum(gap.values()) or 1
@@ -292,19 +320,13 @@ def fill_plan(employment, postings, titles, calls, min_employment=20000, max_cal
             break
         if quota[soc] < max_calls:
             quota[soc] += 1
-    plan, round_ = [], 0
-    while len(plan) < calls and round_ < max_calls:
+    target, round_ = len(plan) + calls, 0
+    while len(plan) < target and round_ < max_calls:
         for soc in order:
-            if len(plan) >= calls:
+            if len(plan) >= target:
                 break
-            if round_ >= quota[soc]:
-                continue
-            for title, page in candidates[soc]:
-                key = title.lower() if page == 1 else f"{title.lower()}#{page}"
-                if key not in used:
-                    used.add(key)
-                    plan.append((soc, title, page))
-                    break
+            if round_ < quota[soc]:
+                take(soc)
         round_ += 1
     return plan
 
@@ -315,12 +337,13 @@ def _on_topic(results, title):
     return sum(head in (r.get("title") or "").lower() for r in results) / len(results) if results else 1.0
 
 
-def fill(app_id, app_key, plan, max_days_old=31, per_page=50, pause=2.5, session=None):
+def fill(app_id, app_key, plan, max_days_old=31, per_page=50, pause=2.5, session=None, log=None):
     """Yield postings rows for each (soc, title, page) in the plan: that page of a
     title-only search for the title across the US. Adzuna's default ranking
     sometimes floats unrelated ads to the top (a "Cashier" search led with
     warehouse jobs), so when under half the results carry the title the page is
-    fetched again sorted by date, which keeps to the title."""
+    fetched again sorted by date, which keeps to the title. Each search made
+    is added to the `log` file as it is done, for later fills to skip."""
     session = session or requests.Session()
     for i, (soc, title, page) in enumerate(plan, 1):
         try:
@@ -336,6 +359,9 @@ def fill(app_id, app_key, plan, max_days_old=31, per_page=50, pause=2.5, session
         except PageFailed as exc:
             print(f"  skipped {title} page {page}: {exc}")
             continue
+        if log:
+            with open(log, "a") as f:
+                f.write((title if page == 1 else f"{title}#{page}") + "\n")
         if i % 25 == 0 or i == len(plan):
             print(f"  {i}/{len(plan)} searches; last: {title} p{page} ({soc}), {len(results)} postings")
         for result in results:
@@ -385,6 +411,9 @@ def main(argv=None):
                         "folder (its occupations.csv), searching their common O*NET titles")
     p.add_argument("--onet-dir", default="data/cache/onet_29_3", help="O*NET text files, for --fill")
     p.add_argument("--oews", default="data/cache/oesm24nat.zip", help="OEWS national file, for --fill")
+    p.add_argument("--thin", type=int, default=10, metavar="N",
+                   help="with --fill, first give one search to each occupation with fewer than N postings "
+                        "and at least 5,000 workers (default 10; 0 turns it off)")
     p.add_argument("--title-counts", nargs="*", default=[], metavar="CSV",
                    help="postings files whose titles decide which O*NET titles --fill searches first")
     p.add_argument("--out", required=True, help="CSV file to write")
@@ -402,10 +431,11 @@ def main(argv=None):
         log = Path(str(args.out) + ".fill-titles.txt")
         searched = log.read_text().splitlines() if args.append and log.exists() else []
         titles = read_titles(args.onet_dir, counts=title_counts(args.title_counts), mapped=mapped_titles(args.fill))
-        plan = fill_plan(employment, postings, titles, args.pages, searched=searched)
-        log.write_text("\n".join(searched + [t if p == 1 else f"{t}#{p}" for _, t, p in plan]) + "\n")
+        plan = fill_plan(employment, postings, titles, args.pages, searched=searched, thin=args.thin)
         print(f"Searching {len(plan)} pages across {len({s for s, _, _ in plan})} occupations")
-        rows = fill(args.app_id, args.app_key, plan, args.max_days_old)
+        if not args.append and log.exists():
+            log.unlink()  # a fresh file starts a fresh log
+        rows = fill(args.app_id, args.app_key, plan, args.max_days_old, log=log)
     elif args.newest:
         rows = fetch(args.app_id, args.app_key, args.pages, args.what, args.where, args.max_days_old)
     else:

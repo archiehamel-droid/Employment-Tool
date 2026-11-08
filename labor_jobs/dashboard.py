@@ -16,6 +16,8 @@ import argparse
 import json
 import math
 import os
+import re
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -43,6 +45,13 @@ def _save(out, name, rows):
     return path
 
 
+def results_month(results):
+    """The month a results folder covers, from its name (output/combined-2026-10),
+    else the current month, as YYYY-MM."""
+    m = re.search(r"(\d{4}-\d{2})(?!.*\d{4}-\d{2})", Path(results).name)
+    return m.group(1) if m else date.today().strftime("%Y-%m")
+
+
 def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
     """The Overview, Occupations and Outlook tables, and the states list."""
     results = Path(results)
@@ -53,7 +62,8 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
         ("with_metro", cov.get("with_metro")), ("matched", cov["matched_soc"]),
         ("occupations", cov["occupations_found"]), ("merged_duplicates", cov.get("merged_duplicates", 0)),
         ("gig_ads", methods.get("gig", 0)), ("salary_share", round(cov["with_salary"] / cov["postings"], 4)),
-        ("matched_share", round(cov["matched_soc"] / cov["postings"], 4))]])
+        ("matched_share", round(cov["matched_soc"] / cov["postings"], 4)),
+        ("month", results_month(results))]])
 
     o = pd.read_csv(results / "occupations.csv", dtype={"soc_code": str})
     cols = ["soc_code", "occ_title", "postings", "tot_emp", "demand_index", "median_posted_salary", "salary_samples",

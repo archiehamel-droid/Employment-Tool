@@ -1167,3 +1167,25 @@ def test_one_word_job_at_the_end_of_a_title():
     assert out["onet_code"].tolist()[:3] == ["41-2011.00"] * 2 + ["47-2111.00"]
     assert pd.isna(out["onet_code"].iloc[3])          # "architect" alone is too broad to trust
     assert out["onet_code"].iloc[4] == "41-1011.00"
+
+
+def test_refresh_month_and_thin_states(tmp_path):
+    from datetime import date
+    from labor_jobs import refresh
+    assert refresh.last_month(date(2026, 12, 3)) == "2026-11"
+    assert refresh.last_month(date(2027, 1, 2)) == "2026-12"
+    (tmp_path / "states.csv").write_text("state,postings\nDE,57\nTX,4000\nUS,9\n")
+    assert refresh.thin_states(tmp_path, 300) == ["Delaware"]
+
+
+def test_publish_points_datasets_at_new_uploads():
+    from labor_jobs import publish
+    docs = {"summary": {"description": "Totals from the October 2026 run; BLS wages are May 2024.",
+                        "source": {"kind": "file", "url": "/_blob/old", "name": "summary.json", "format": "json"}},
+            "live": {"source": {"kind": "call", "connector": "x"}}}
+    out = publish.updates(docs, {"summary": "/_blob/new", "live": "/_blob/y", "gone": "/_blob/z"}, "2026-11",
+                          now="2026-12-03T00:00:00Z")
+    assert list(out) == ["summary"]                       # only file datasets that exist
+    assert out["summary"]["source"] == {"kind": "file", "url": "/_blob/new", "name": "summary.json", "format": "json"}
+    assert out["summary"]["description"] == "Totals from the November 2026 run; BLS wages are May 2024."
+    assert publish.previous_month("2027-01") == "2026-12"

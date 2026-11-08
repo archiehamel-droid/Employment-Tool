@@ -457,6 +457,40 @@ tables feed the first four tabs. The Resume check tab gets these files:
 To refresh the dashboard, rebuild these files after a new run and replace its datasets
 with them.
 
+### Monthly refresh
+
+One command fetches a month's postings from every source and rebuilds the results and the
+dashboard data:
+
+```bash
+export ADZUNA_APP_ID=... ADZUNA_APP_KEY=... BLS_API_KEY=... BLS_CONTACT_EMAIL=...
+python -m labor_jobs.refresh                  # last month; or --month 2026-11
+```
+
+It runs these steps in order:
+1. USAJOBS (last 31 days, with announcement text)
+2. the company job boards
+3. an Adzuna sample (`--sample-pages`, default 300)
+4. the main run
+5. `--fill` for under-covered occupations (`--fill-pages`, default 400)
+6. the newest Adzuna pages for states with fewer than 300 postings
+7. the main run again
+8. `labor_jobs.dashboard`
+
+A step whose output file is already there is skipped, so a run that stopped part way can
+simply be started again (`--force` redoes everything). Without the Adzuna keys, the Adzuna
+steps are skipped and the rest still runs. What each step did goes to
+`output/refresh-<month>.json`. A full run makes roughly 800 to 1,000 Adzuna calls and takes
+a few hours, most of it fetching USAJOBS announcement text (`--no-text` skips that). The
+Overview's month comes from the data (the `month` row of `summary.json`), so it moves with
+each refresh.
+
+After the uploads, `python -m labor_jobs.publish` prepares the dashboard's dataset updates.
+Give it the uploaded file links, the datasets' saved documents and their versions. It
+points each dataset at its new file and moves the month named in its description ("October
+2026" to "November 2026"). A scheduled task runs the refresh and the publish early each
+month.
+
 The Resume check tab runs the same matching as `--resume`, ported to JavaScript, all
 inside the reader's browser. A resume pasted or opened there (Word `.docx` or plain text)
 is never uploaded or saved. PDFs can't be read in the page; paste their text instead.

@@ -275,6 +275,16 @@ ID numbers are stripped. Each shows its postings and median posted salary, with 
 occupation's specialized O*NET roles underneath. BLS projects growth only for whole
 occupations, so a specific title shares its occupation's outlook.
 
+The Outlook tab has one picker row: choose an industry or type a job (or click one
+anywhere on the tab). Each view now has what the other had:
+- **Industry.** Its JOLTS openings chart and forecast, plus the jobs it employs most (the
+  occupations with the most workers there, with each job's growth, openings a year,
+  median wage and postings).
+- **Job.** Its ten-year outlook, plus an openings chart. BLS counts openings by industry,
+  not job, so the chart follows the industries that employ the job, each weighted by its
+  share of the job's employment, as an index with the latest month at 100, with the
+  weighted forecast.
+
 ## Matching jobs to a resume or major
 
 After a main run, `labor_jobs.match` finds the occupations and postings in its results that

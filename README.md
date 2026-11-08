@@ -214,7 +214,7 @@ US for one of the occupation's common titles from O*NET's sample of reported tit
   turns this off.
 
 Searches go through deeper pages of an occupation's best title before its later titles:
-each later title counts as two pages deeper (up to page 10). That is why "Cashier" pages
+each later title counts as two pages deeper (up to page 20). That is why "Cashier" pages
 5 to 8 come before "Store Clerk". Each search is logged next to the output file
 (`2026-10.csv.fill-titles.txt`) as soon as it is done, so a run stopped by Adzuna's daily
 limit loses nothing. Another `--fill --append` run with fresh results then searches new

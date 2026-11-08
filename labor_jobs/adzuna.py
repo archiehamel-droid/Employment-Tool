@@ -250,7 +250,7 @@ def read_titles(onet_dir, per_occupation=6, counts=None, mapped=None):
     return titles
 
 
-def fill_plan(employment, postings, titles, calls, min_employment=20000, max_calls=10, max_page=10, searched=(),
+def fill_plan(employment, postings, titles, calls, min_employment=20000, max_calls=10, max_page=20, searched=(),
               thin=0, thin_employment=5000):
     """Searches aimed at the occupations with the biggest shortfall of postings:
     each occupation's expected postings is its share of employment times the

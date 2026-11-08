@@ -1189,3 +1189,15 @@ def test_publish_points_datasets_at_new_uploads():
     assert out["summary"]["source"] == {"kind": "file", "url": "/_blob/new", "name": "summary.json", "format": "json"}
     assert out["summary"]["description"] == "Totals from the November 2026 run; BLS wages are May 2024."
     assert publish.previous_month("2027-01") == "2026-12"
+
+
+def test_occupation_titles_group_and_clean(tmp_path):
+    from labor_jobs.dashboard import display_title, occupation_titles
+    assert display_title("Travel ICU RN - $3,065 per week") == "Travel ICU RN"
+    assert display_title("Store Clerk #1234 - Miami") == "Store Clerk - Miami"
+    rows = ["title,soc_code,annual_salary", "Cashier,41-2011,30000", "Cashier - $15/hour,41-2011,31200",
+            "cashier,41-2011,32000", "Store Clerk,41-2011,", "Store Clerk,41-2011,", "One-off Title,41-2011,"]
+    (tmp_path / "p.csv").write_text("\n".join(rows) + "\n")
+    t = occupation_titles(tmp_path / "p.csv")
+    assert t.title.tolist() == ["Cashier", "Store Clerk"]          # pay variants grouped; singletons dropped
+    assert t.postings.tolist() == [3, 2] and t.median_salary.iloc[0] == 31200

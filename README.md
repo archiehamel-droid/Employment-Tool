@@ -267,6 +267,14 @@ The dashboard's Outlook tab views the outlook either way:
   the median wage it pays, and the expected six-month change in openings for its JOLTS
   industry, which links to that industry's chart (`occupation_industries.json`).
 
+Clicking an occupation in the Occupations tab (the table, the specialized roles or the
+Overview's most-posted chart) opens its outlook. The job view also lists the specific job
+titles employers posted most for that occupation this month (`occupation_titles.json`, up
+to 10 per occupation, posted at least twice). Titles are grouped once pay, locations and
+ID numbers are stripped. Each shows its postings and median posted salary, with the
+occupation's specialized O*NET roles underneath. BLS projects growth only for whole
+occupations, so a specific title shares its occupation's outlook.
+
 ## Matching jobs to a resume or major
 
 After a main run, `labor_jobs.match` finds the occupations and postings in its results that

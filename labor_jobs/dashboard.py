@@ -25,7 +25,7 @@ import pandas as pd
 from . import (bls, h1b, industries, jolts, majors, occupation_text, personality, posting_requirements, projections,
                skills)
 from .matching import build_matcher
-from .soc_mapping import load_onet_titles, load_title_overrides
+from .soc_mapping import load_onet_titles, load_title_overrides, normalize_title
 
 
 def _clean(df):
@@ -138,7 +138,41 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
     _save(out, "specialized", _clean(sp[[c for c in ["onet_code", "onet_title", "bls_occupation", "postings", "job_zone",
                                                      "median_posted_salary", "h1b_median_wage", "perm_median_wage",
                                                      "posting_technologies"] if c in sp]]))
+    _save(out, "occupation_titles", _clean(occupation_titles(results / "postings_with_soc.csv")))
     return d
+
+
+PAY_IN_TITLE = re.compile(r"\$\s?[\d,.]+[kK]?(\s*(-|to)\s*\$?\s?[\d,.]+[kK]?)?(\s*(per|/|an?)\s*(hour|hr|week|wk|year|yr|month|mo))?",
+                          re.I)
+ID_IN_TITLE = re.compile(r"\s*(\(\s*[A-Z]*-?\d[\w-]*\s*\)|#\s?\d[\w-]*|\b(req|job|id)\s*[:#]?\s*\d[\w-]*)", re.I)
+
+
+def display_title(title):
+    """A posting title for display: pay amounts ("$2,084 per week") and ID numbers
+    taken out, with the separators they leave behind."""
+    t = ID_IN_TITLE.sub("", PAY_IN_TITLE.sub("", str(title)))
+    t = re.sub(r"\s*[-–|:,/]+\s*$", "", re.sub(r"\s*[-–|]\s*[-–|]\s*", " - ", t))
+    return re.sub(r"\s{2,}", " ", re.sub(r"\(\s*\)", "", t)).strip(" -–|,:")
+
+
+def occupation_titles(postings_csv, per_occupation=10, min_postings=2):
+    """The job titles employers post most for each occupation: titles are grouped
+    once pay, IDs and locations are stripped (normalize_title), shown as their most
+    common spelling, with how many postings use them and their median posted salary
+    (when at least 3 state one)."""
+    p = pd.read_csv(postings_csv, usecols=["title", "soc_code", "annual_salary"], dtype={"soc_code": str},
+                    low_memory=False).dropna(subset=["title", "soc_code"])
+    p["key"] = p["title"].map(normalize_title)
+    p = p[p["key"].str.len() > 0]
+    groups = p.groupby(["soc_code", "key"])
+    t = groups.agg(postings=("title", "size"), salary_samples=("annual_salary", "count"),
+                   median_salary=("annual_salary", "median")).reset_index()
+    t["title"] = groups["title"].agg(lambda s: s.map(display_title).value_counts().index[0]).values
+    t = t[t.postings >= min_postings]
+    t["median_salary"] = t["median_salary"].where(t.salary_samples >= 3).round(-2)
+    t = t.sort_values(["soc_code", "postings"], ascending=[True, False]).groupby("soc_code").head(per_occupation)
+    t["rank"] = t.groupby("soc_code").cumcount() + 1
+    return t[["soc_code", "rank", "title", "postings", "median_salary"]]
 
 
 def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_year):

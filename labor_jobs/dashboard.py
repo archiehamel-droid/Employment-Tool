@@ -55,16 +55,6 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
         ("gig_ads", methods.get("gig", 0)), ("salary_share", round(cov["with_salary"] / cov["postings"], 4)),
         ("matched_share", round(cov["matched_soc"] / cov["postings"], 4))]])
 
-    p = pd.read_csv(results / "postings_with_soc.csv", usecols=["source", "annual_salary"], low_memory=False)
-    labels = {"usajobs": "USAJOBS (federal)", "adzuna": "Adzuna", "greenhouse": "Greenhouse boards",
-              "ashby": "Ashby boards", "lever": "Lever boards", "linkedin": "LinkedIn (Kaggle)"}
-    s = p.groupby("source").agg(postings=("source", "size"), with_salary=("annual_salary", "count"),
-                                median_salary=("annual_salary", "median")).reset_index()
-    s["salary_share"] = (s.with_salary / s.postings).round(4)
-    s["label"] = s.source.map(labels).fillna(s.source)
-    _save(out, "sources", _clean(s.sort_values("postings", ascending=False)[
-        ["source", "label", "postings", "with_salary", "salary_share", "median_salary"]]))
-
     o = pd.read_csv(results / "occupations.csv", dtype={"soc_code": str})
     cols = ["soc_code", "occ_title", "postings", "tot_emp", "demand_index", "median_posted_salary", "salary_samples",
             "a_median", "h1b_median_wage", "perm_median_wage", "proj_growth_pct", "proj_annual_openings",

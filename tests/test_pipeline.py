@@ -1126,8 +1126,14 @@ def test_industries_employing_each_job():
     assert rn["share_pct"].tolist() == [60.0, 30.0]  # of the job's wage and salary employment
     assert rn["jolts"].tolist() == ["Health care and social assistance"] * 2
     assert I.jolts_industry("113") == "Mining and logging" and I.jolts_industry("999") == "Government"
+    assert I.jolts_industry("611G") == I.jolts_industry("622G") == I.jolts_industry("491") == "Government"
+    assert I.jolts_industry("611") == "Private educational services"
     assert I.short_title("Federal, State, and Local Government, excluding X (OEWS Designation)") == \
         "Government (federal, state and local)"
+    # Shares are of the job's national employment: industries BLS suppresses still count in the total.
+    shared = I.top_industries(table, n=2, national=pd.Series({"29-1141": 2000, "47-2111": 900}))
+    assert shared[shared.soc_code == "29-1141"]["share_pct"].tolist() == [30.0, 15.0]
+    assert shared[shared.soc_code == "47-2111"]["share_pct"].tolist() == [90.0, 10.0]   # below its own sum: uses that
 
 
 def test_adzuna_fill_plan_targets_shortfalls(tmp_path):
@@ -1195,6 +1201,9 @@ def test_occupation_titles_group_and_clean(tmp_path):
     from labor_jobs.dashboard import display_title, occupation_titles
     assert display_title("Travel ICU RN - $3,065 per week") == "Travel ICU RN"
     assert display_title("Store Clerk #1234 - Miami") == "Store Clerk - Miami"
+    from labor_jobs.dashboard import title_key
+    assert title_key("Part-Time Cashier") == title_key("Cashier (Seasonal)") == "cashier"
+    assert title_key("Lead Cashier") != "cashier" and title_key("Nurse (Operating Room)") == "nurse operating room"
     rows = ["title,soc_code,annual_salary", "Cashier,41-2011,30000", "Cashier - $15/hour,41-2011,31200",
             "cashier,41-2011,32000", "Store Clerk,41-2011,", "Store Clerk,41-2011,", "One-off Title,41-2011,"]
     (tmp_path / "p.csv").write_text("\n".join(rows) + "\n")

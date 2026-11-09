@@ -25,7 +25,7 @@ import pandas as pd
 from . import (bls, h1b, industries, jolts, majors, occupation_text, personality, posting_requirements, projections,
                skills)
 from .matching import build_matcher
-from .soc_mapping import load_onet_titles, load_title_overrides, normalize_title
+from .soc_mapping import load_onet_titles, load_title_overrides
 
 
 def _clean(df):
@@ -131,7 +131,9 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
 
     # Which industries employ each job (OEWS industry-specific estimates), linked to JOLTS industries.
     table = industries.read_industry_employment(industries.oews_industry_file(cache_dir, 2024, user_agent))
-    _save(out, "occupation_industries", _clean(industries.top_industries(table)))
+    national = bls.read_oews(bls.oews_file(cache_dir, 2024, "nat", user_agent))
+    national = national[national.o_group == "detailed"].set_index("soc_code")["tot_emp"]
+    _save(out, "occupation_industries", _clean(industries.top_industries(table, national=national)))
 
     d = pd.read_csv(results / "detailed_occupations.csv", dtype={"onet_code": str, "soc_code": str})
     sp = d[d.specialized & (d.postings >= 5)].sort_values("postings", ascending=False).head(40)
@@ -155,14 +157,28 @@ def display_title(title):
     return re.sub(r"\s{2,}", " ", re.sub(r"\(\s*\)", "", t)).strip(" -–|,:")
 
 
+SCHEDULE_WORDS = re.compile(r"\b(part[\s-]*time|full[\s-]*time|pt|ft|prn|per diem|seasonal|temporary|temp|"
+                            r"(day|night|evening|overnight|weekend|closing|opening|morning|afternoon|[123](st|nd|rd))\s*shift|"
+                            r"shift|days|nights|weekends)\b", re.I)
+
+
+def title_key(title):
+    """How job titles are grouped for the specific-jobs list: pay, IDs, schedule words
+    ("Part Time", "Seasonal") and punctuation don't count, but specialties and seniority
+    do, so "Nurse (Operating Room)" and "Lead Cashier" stay their own titles."""
+    t = SCHEDULE_WORDS.sub(" ", display_title(title).lower())
+    t = re.sub(r"[^a-z0-9+#&]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def occupation_titles(postings_csv, per_occupation=10, min_postings=2):
     """The job titles employers post most for each occupation: titles are grouped
-    once pay, IDs and locations are stripped (normalize_title), shown as their most
+    by title_key (pay, IDs and schedule words don't count), shown as their most
     common spelling, with how many postings use them and their median posted salary
     (when at least 3 state one)."""
     p = pd.read_csv(postings_csv, usecols=["title", "soc_code", "annual_salary"], dtype={"soc_code": str},
                     low_memory=False).dropna(subset=["title", "soc_code"])
-    p["key"] = p["title"].map(normalize_title)
+    p["key"] = p["title"].map(title_key)
     p = p[p["key"].str.len() > 0]
     groups = p.groupby(["soc_code", "key"])
     t = groups.agg(postings=("title", "size"), salary_samples=("annual_salary", "count"),

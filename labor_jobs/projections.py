@@ -73,6 +73,7 @@ def read_outlook(path):
     df = pd.read_excel(path, sheet_name="Table 1.2", header=1)
     code_col = next(c for c in df.columns if c.endswith("code"))
     type_col = next(c for c in df.columns if c.startswith("Occupation type"))
+    published_total = df[df[code_col].astype(str).str.strip() == "00-0000"]
     df = df[df[type_col] == "Line item"]
     out = pd.DataFrame({"soc_code": df[code_col].astype(str).str.strip()})
     employment = [c for c in df.columns if str(c).startswith("Employment, ")]
@@ -91,8 +92,19 @@ def read_outlook(path):
     known = out["education"].notna()
     for col in ("experience", "training"):
         out.loc[known & out[col].isna(), col] = "None"
-    start, end = out["emp_start"].sum(), out["emp_end"].sum()
-    total = {"soc_code": "00-0000", "title": "All occupations", "emp_start": start, "emp_end": end,
-             "change": end - start, "growth_pct": round(100 * (end - start) / start, 1) if start else None,
-             "openings": out["openings"].sum()}
+    # BLS's own all-occupations row; adding up the rounded line items drifts a little.
+    if len(published_total):
+        row = published_total.iloc[0]
+
+        def cell(prefix):
+            return pd.to_numeric(row[next(c for c in df.columns if prefix in str(c))], errors="coerce")
+        start, end = cell(employment[0]) * 1000, cell(employment[1]) * 1000
+        total = {"soc_code": "00-0000", "title": "All occupations", "emp_start": start, "emp_end": end,
+                 "change": end - start, "growth_pct": cell("Employment change, percent"),
+                 "openings": cell("Occupational openings") * 1000, "median_wage": cell("Median annual wage")}
+    else:
+        start, end = out["emp_start"].sum(), out["emp_end"].sum()
+        total = {"soc_code": "00-0000", "title": "All occupations", "emp_start": start, "emp_end": end,
+                 "change": end - start, "growth_pct": round(100 * (end - start) / start, 1) if start else None,
+                 "openings": out["openings"].sum()}
     return pd.concat([pd.DataFrame([total]), out], ignore_index=True)

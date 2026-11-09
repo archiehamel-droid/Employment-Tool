@@ -252,6 +252,10 @@ The program adds three forward-looking pieces:
 
 ### Outlook by industry or job
 
+Industry shares use each job's national OEWS employment as the denominator. Educational
+services and hospitals are split by ownership (the OEWS ownership file), so public schools
+and hospitals, like the Postal Service, count as government, as JOLTS does.
+
 The dashboard's Outlook tab views the outlook either way:
 
 - **By industry**: pick any of the 16 JOLTS industries (or total nonfarm) to see its
@@ -270,8 +274,8 @@ The dashboard's Outlook tab views the outlook either way:
 Clicking an occupation in the Occupations tab (the table, the specialized roles or the
 Overview's most-posted chart) opens its outlook. The job view also lists the specific job
 titles employers posted most for that occupation this month (`occupation_titles.json`, up
-to 10 per occupation, posted at least twice). Titles are grouped once pay, locations and
-ID numbers are stripped. Each shows its postings and median posted salary, with the
+to 10 per occupation, posted at least twice). Titles are grouped when they differ only in
+pay, ID numbers or schedule words; specialties and seniority stay separate. Each shows its postings and median posted salary, with the
 occupation's specialized O*NET roles underneath. BLS projects growth only for whole
 occupations, so a specific title shares its occupation's outlook.
 

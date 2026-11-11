@@ -5,8 +5,9 @@
     python -m labor_jobs.research check --candidates output/research_candidates.json --notes notes.json \\
         --out output/dashboard/industry_research.json
 
-fetch searches Semantic Scholar (free; an API key in SEMANTIC_SCHOLAR_API_KEY raises
-its rate limit) for each JOLTS industry's labor-demand outlook, keeps recent papers
+fetch searches Crossref (free, journal articles with abstracts) and Semantic Scholar
+(free but often rate-limited; SEMANTIC_SCHOLAR_API_KEY raises its limit) for each JOLTS
+industry's labor-demand outlook, keeps recent papers
 with an abstract (2019 on), and ranks them by citations, favoring newer ones. With
 OPENALEX_API_KEY set it also searches OpenAlex.
 
@@ -27,6 +28,7 @@ from pathlib import Path
 import requests
 
 S2_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+CROSSREF_URL = "https://api.crossref.org/works"
 OA_URL = "https://api.openalex.org/works"
 FIELDS = "title,year,venue,citationCount,abstract,url,externalIds,tldr"
 
@@ -55,7 +57,45 @@ QUERIES = {
 }
 
 
-def _get(url, params, headers=None, tries=7):
+# A candidate must name its industry and be about work, in its title or abstract.
+TOPIC = {
+    "Total nonfarm": r"labou?r market|employment|workforce|jobs",
+    "Mining and logging": r"mining industry|coal min|mine workers|miners\b|logging industry|oil and gas|extractive|fracking",
+    "Construction": r"construction (industry|work|labou?r|sector|trades|employment)|homebuild|building trades",
+    "Manufacturing": r"manufactur|factor(y|ies)|industrial robots?|production workers",
+    "Wholesale trade": r"wholesal",
+    "Retail trade": r"retail|e-?commerce|cashiers?|self-checkout",
+    "Transportation, warehousing, and utilities": r"warehous|logistic|truck|freight|transportation (industry|sector|workers)|"
+                                                  r"utilit(y|ies) (industry|sector|workers)|delivery drivers?",
+    "Information": r"information sector|media industr|newspaper|journalis|telecommunication|software industr|publishing",
+    "Financial activities": r"financial (services|sector|industry)|banking|bank employ|insurance (industry|sector)|"
+                            r"real estate|fintech",
+    "Professional and business services": r"professional services|knowledge work|white-collar|consulting|lawyers|"
+                                          r"legal (jobs|profession|services)|accountants?|business services|"
+                                          r"software (developers|engineers)|programmers",
+    "Private educational services": r"education|teachers?|schools?|universit|colleges?|faculty",
+    "Health care and social assistance": r"health|nurs|physician|hospital|care work|home care|social assistance",
+    "Arts, entertainment, and recreation": r"\barts\b|artists?|entertainment industr|creative (workers|industr|economy|work)|"
+                                           r"musicians?|film industr|performing arts",
+    "Accommodation and food services": r"restaurant|hospitality|food service|hotel|tourism",
+    "Other services": r"repair|personal services|skilled trades|auto mechanics|beauty|hairdress|laundry",
+    "Government": r"public sector|government (employ|workforce|workers|jobs)|public employ|civil service|"
+                  r"state and local government",
+}
+# Medical workforce studies match many words ("distribution", "workforce") but belong to health care only.
+MEDICAL = r"physician|pediatric|surgeon|dermatolog|oncolog|otolaryng|nursing|patients?\b"
+WORK = r"employ|jobs?\b|workforce|labou?r|workers|hiring|occupation|wages?|staffing|shortage"
+
+
+def on_topic(paper, industry):
+    import re
+    text = f"{paper.get('title') or ''} {paper.get('abstract') or paper.get('tldr') or ''}".lower()
+    if industry != "Health care and social assistance" and re.search(MEDICAL, text):
+        return False
+    return bool(re.search(TOPIC.get(industry, "."), text)) and bool(re.search(WORK, text))
+
+
+def _get(url, params, headers=None, tries=3):
     for i in range(tries):
         r = requests.get(url, params=params, headers=headers or {}, timeout=60)
         if r.status_code == 429 or r.status_code >= 500:
@@ -76,6 +116,25 @@ def search_s2(query, limit=25, year_from=2019):
                     "citations": p.get("citationCount") or 0, "abstract": p.get("abstract"),
                     "tldr": (p.get("tldr") or {}).get("text"),
                     "url": f"https://doi.org/{doi}" if doi else p.get("url")})
+    return out
+
+
+def search_crossref(query, limit=60, year_from=2019):
+    """Crossref journal articles with an abstract (JATS markup stripped)."""
+    import re
+    # The dashboard is about US jobs: without this, studies of other countries crowd in.
+    body = _get(CROSSREF_URL, {"query.bibliographic": f"{query} United States", "rows": limit, "sort": "relevance",
+                               "filter": f"has-abstract:true,from-pub-date:{year_from}-01-01,type:journal-article",
+                               "select": "DOI,title,container-title,issued,is-referenced-by-count,abstract"},
+                {"User-Agent": "labor-jobs/1.0 (employment tool research notes)"})
+    out = []
+    for w in (body.get("message") or {}).get("items") or []:
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", w.get("abstract") or "")).strip()
+        text = re.sub(r"^(Abstract|ABSTRACT)\s*", "", text)
+        year = ((w.get("issued") or {}).get("date-parts") or [[None]])[0][0]
+        out.append({"id": "doi:" + w["DOI"].lower(), "title": (w.get("title") or [None])[0], "year": year,
+                    "venue": (w.get("container-title") or [None])[0], "citations": w.get("is-referenced-by-count") or 0,
+                    "abstract": text or None, "tldr": None, "url": f"https://doi.org/{w['DOI']}"})
     return out
 
 
@@ -107,16 +166,20 @@ def rank(papers, per_industry=6, today=None):
     seen, keep = set(), []
     for p in papers:
         key = (p.get("title") or "").strip().lower()
-        if not key or key in seen or not (p.get("abstract") or p.get("tldr")):
+        if not key or key in seen or not (p.get("abstract") or p.get("tldr")) or len(p.get("abstract") or p.get("tldr")) < 200:
             continue
         seen.add(key)
         age = max(0, year - (p.get("year") or year))
         p["score"] = round(math.log1p(p.get("citations") or 0) - 0.25 * age, 3)
         keep.append(p)
+    # Rarely cited papers only when there aren't enough cited ones.
+    cited = [p for p in keep if (p.get("citations") or 0) >= 3]
+    if len(cited) >= 3:
+        keep = cited
     return sorted(keep, key=lambda p: p["score"], reverse=True)[:per_industry]
 
 
-def fetch(out, industries=None, per_industry=6, pause=4):
+def fetch(out, industries=None, per_industry=6, pause=2):
     """Candidates per industry, saved after each one. A rerun keeps industries that
     already have 3 or more and retries the rest; a query that keeps failing is skipped."""
     out = Path(out)
@@ -127,13 +190,13 @@ def fetch(out, industries=None, per_industry=6, pause=4):
             continue
         papers = []
         for q in QUERIES[industry]:
-            for search in (search_s2, search_openalex):
+            for search in (search_crossref, search_s2, search_openalex):
                 try:
                     papers += search(q)
                 except (RuntimeError, requests.RequestException) as exc:
                     print(f"  skipped {search.__name__} '{q}': {exc}")
                 time.sleep(pause)
-        result[industry] = rank(papers, per_industry)
+        result[industry] = rank([p for p in papers if on_topic(p, industry)], per_industry)
         print(f"  {industry}: {len(result[industry])} papers", flush=True)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps({"fetched": date.today().isoformat(), "industries": result}, indent=1))

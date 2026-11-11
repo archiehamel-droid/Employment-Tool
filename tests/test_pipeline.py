@@ -1253,9 +1253,9 @@ def test_leading_signal_track_record():
 def test_research_notes_only_cite_candidates():
     from labor_jobs import research
     papers = [{"id": "s2:a", "title": "Nurse supply", "year": 2024, "venue": "J", "url": "https://doi.org/1", "citations": 50,
-               "abstract": "x"},
+               "abstract": "x" * 250},
               {"id": "s2:b", "title": "Care demand", "year": 2022, "venue": "K", "url": "https://doi.org/2", "citations": 9,
-               "abstract": "y"},
+               "abstract": "y" * 250},
               {"id": "s2:c", "title": "No abstract", "year": 2025, "citations": 999}]
     ranked = research.rank(papers + [dict(papers[0])])
     assert [p["id"] for p in ranked] == ["s2:a", "s2:b"]                    # duplicate and abstract-less dropped

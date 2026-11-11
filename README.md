@@ -312,14 +312,18 @@ points to. Months overlap, so the test is a guide, not proof.
 
 Each industry (and, in the job view, the industry employing the most of that job) has a
 short summary of recent research on where its jobs are heading:
-1. `python -m labor_jobs.research fetch` finds candidate papers on Semantic Scholar:
-   2019 on, with an abstract, ranked by citations with newer papers favored. With
-   `OPENALEX_API_KEY` set it also searches OpenAlex.
+1. `python -m labor_jobs.research fetch` finds candidate papers on Crossref and Semantic
+   Scholar (and OpenAlex with `OPENALEX_API_KEY`): 2019 on, with an abstract, naming the
+   industry and work (jobs, employment, workforce...), US-focused for Crossref, ranked by
+   citations with newer papers favored. Medical-workforce papers count only for health care.
 2. Claude writes a few sentences per industry from those abstracts, citing 2 to 5 of them.
 3. `python -m labor_jobs.research check` refuses any cited paper that isn't one of that
    industry's candidates, so sources can't be invented.
 
-The summaries are context, not forecasts, and the page says so. Semantic Scholar's free
+The summaries are context, not forecasts, and the page says so. An industry whose search
+finds too little relevant research gets no note that month (in the first run: information,
+wholesale trade and other services). In the job view, public schools and hospitals use the
+education and health care notes, though their openings count as government. Semantic Scholar's free
 tier is rate-limited; the fetch waits, skips a query it can't get, and resumes on a rerun.
 `SEMANTIC_SCHOLAR_API_KEY` (free on request) speeds it up.
 

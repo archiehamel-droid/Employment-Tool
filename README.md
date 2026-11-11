@@ -546,8 +546,10 @@ month's days into `data/adzuna/<month>.csv` with `python -m labor_jobs.daily com
 dropping repeats of the same posting, before its own Adzuna steps. It then removes the
 day files.
 
-Under Adzuna's terms for personal research, published results credit "The Adzuna API"
-with a link to Adzuna; the dashboard's Overview does.
+Under Adzuna's terms, published results credit "The Adzuna API" with a link to Adzuna (the
+Overview's first line does). Each Adzuna ad listed in the Resume check carries an "Adzuna"
+label, at least 116 x 23 pixels, linked to Adzuna. The postings files record each posting's
+source (`v`) for this; the page also recognizes Adzuna's links.
 
 ## Setup
 

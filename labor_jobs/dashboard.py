@@ -202,7 +202,8 @@ def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_y
             "id": rows["job_id"].astype(str), "t": rows["title"], "c": rows["company_name"], "l": rows["location"],
             "s": rows["state"], "p": rows["annual_salary"].round(), "o": rows["onet_code"],
             "k": rows.get("technologies"), "y": rows.get("years_required"), "d": rows.get("degree_required"),
-            "f": rows.get("degree_flexible"), "u": rows.get("url"), "r": rows.get("credentials_required")})
+            "f": rows.get("degree_flexible"), "u": rows.get("url"), "r": rows.get("credentials_required"),
+            "v": rows.get("source")})
         compact["f"] = compact["f"].map(lambda v: None if pd.isna(v) else (1 if v is True or v == "True" else 0))
         _save(out, f"postings_{group}", _clean(compact))
         groups.append(group)

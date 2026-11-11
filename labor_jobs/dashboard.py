@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import (bls, h1b, industries, jolts, majors, occupation_text, personality, posting_requirements, projections,
+from . import (bls, h1b, industries, jolts, leading, majors, occupation_text, personality, posting_requirements, projections,
                skills)
 from .matching import build_matcher
 from .soc_mapping import load_onet_titles, load_title_overrides
@@ -110,8 +110,8 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
         # Every industry's openings history and forecast, for the Outlook tab's picker.
         industry = fc[fc["group"] == "industry"]
         ids = industry["series_id"].unique().tolist()
-        history = bls.fetch_series(ids, last_year - 4, last_year, user_agent, api_key)
-        history = history[history.month >= f"{last_year - 3}-01"]
+        full_history = bls.fetch_series(ids, last_year - 5, last_year, user_agent, api_key)
+        history = full_history[full_history.month >= f"{last_year - 3}-01"]
         names = dict(zip(industry["series_id"], industry["name"]))
         series_rows = [{"industry": names[r.series_id], "month": r.month, "kind": "actual",
                         "openings": round(r.value * 1000), "lower": None, "upper": None}
@@ -120,6 +120,18 @@ def summary_tables(results, out, user_agent, api_key, cache_dir="data/cache"):
                          "lower": round(r.lower_80 * 1000), "upper": round(r.upper_80 * 1000)}
                         for r in industry.itertuples()]
         _save(out, "jolts_series", series_rows)
+
+        # Leading signals (Indeed postings, Census business applications) and their track
+        # record against openings, tested on the longer history.
+        long_rows = pd.DataFrame([{"industry": names[r.series_id], "month": r.month, "kind": "actual",
+                                   "openings": r.value * 1000}
+                                  for r in full_history.itertuples() if r.series_id in names])
+        try:
+            signals, tests = leading.build(long_rows, cache_dir, user_agent)
+            _save(out, "leading_signals", _clean(signals))
+            _save(out, "leading_tests", _clean(tests))
+        except Exception as exc:  # a source being down shouldn't stop the rest of the dashboard
+            print(f"  leading signals skipped: {exc}")
 
     # Every occupation's ten-year outlook (BLS Employment Projections), with this month's postings.
     outlook = projections.read_outlook(projections.projections_file(cache_dir, user_agent))

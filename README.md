@@ -289,6 +289,40 @@ anywhere on the tab). Each view now has what the other had:
   share of the job's employment, as an index with the latest month at 100, with the
   weighted forecast.
 
+#### Leading signals
+
+The industry view shows two monthly signals that can move before hiring does
+(`labor_jobs/leading.py`, built with the dashboard data):
+- **Indeed Hiring Lab's Job Postings Index** (free on GitHub): postings by occupational
+  category, February 2020 = 100. An industry gets the average of the categories that
+  mostly work in it (`INDEED_CATEGORIES`); wholesale trade and mining have none.
+- **Census Business Formation Statistics:** business applications by NAICS sector.
+
+Each signal is tested against the industry's JOLTS openings, month by month since 2021: its
+change over 3 months against openings' change over the next 6. The test reports how often
+they moved the same way (against chance) and whether predicting from the signal, with a
+line fitted only on earlier months, beat assuming no change. In the first test (63 months
+to September 2026), Indeed postings beat no change for total nonfarm (5.1% against 6.7%
+average error) and for 7 industries, including manufacturing, construction, government
+and professional services. Business applications didn't beat it anywhere. The page says
+which is which, and where a signal has helped it shows the 6-month change in openings it
+points to. Months overlap, so the test is a guide, not proof.
+
+#### What research says
+
+Each industry (and, in the job view, the industry employing the most of that job) has a
+short summary of recent research on where its jobs are heading:
+1. `python -m labor_jobs.research fetch` finds candidate papers on Semantic Scholar:
+   2019 on, with an abstract, ranked by citations with newer papers favored. With
+   `OPENALEX_API_KEY` set it also searches OpenAlex.
+2. Claude writes a few sentences per industry from those abstracts, citing 2 to 5 of them.
+3. `python -m labor_jobs.research check` refuses any cited paper that isn't one of that
+   industry's candidates, so sources can't be invented.
+
+The summaries are context, not forecasts, and the page says so. Semantic Scholar's free
+tier is rate-limited; the fetch waits, skips a query it can't get, and resumes on a rerun.
+`SEMANTIC_SCHOLAR_API_KEY` (free on request) speeds it up.
+
 ## Matching jobs to a resume or major
 
 After a main run, `labor_jobs.match` finds the occupations and postings in its results that

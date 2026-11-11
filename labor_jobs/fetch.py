@@ -1,14 +1,17 @@
 """Download helper with on-disk caching."""
 
+import time
 from pathlib import Path
 
 import requests
 
 
-def download(url, dest, user_agent):
-    """Download url to dest unless it is already cached; return the path."""
+def download(url, dest, user_agent, max_age_days=None):
+    """Download url to dest unless it is already cached (and, with max_age_days,
+    no older than that); return the path."""
     dest = Path(dest)
-    if dest.exists() and dest.stat().st_size > 0:
+    fresh = max_age_days is None or time.time() - dest.stat().st_mtime < max_age_days * 86400 if dest.exists() else False
+    if dest.exists() and dest.stat().st_size > 0 and fresh:
         return dest
     print(f"  downloading {url}")
     resp = requests.get(url, headers={"User-Agent": user_agent}, timeout=300)

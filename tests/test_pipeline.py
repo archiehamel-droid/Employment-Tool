@@ -1233,3 +1233,35 @@ def test_daily_combine_and_rotating_thin_searches(tmp_path):
     assert sum(soc.startswith("11-") for soc, _, _ in plan) == 4 and any(soc == "41-2011" for soc, _, _ in plan)
     other = adzuna.fill_plan(employment | {"15-1252": 100}, postings, titles, 10, thin=10, thin_calls=4, rotate="d2")
     assert {s for s, _, _ in plan[:4]} != {s for s, _, _ in other[:4]}
+
+
+def test_leading_signal_track_record():
+    from labor_jobs import leading
+    months = [f"{y}-{m:02d}" for y in range(2020, 2027) for m in range(1, 13)][:80]
+    rng = np.random.default_rng(0)
+    sig = pd.Series(100 * np.exp(np.cumsum(rng.normal(0, 0.05, len(months)))), index=months)
+    # Openings follow the signal three months later: the signal should help.
+    op = sig.shift(3).bfill() * 50
+    rec = leading.track_record(sig, op)
+    assert rec["helps"] and rec["same_direction"] > rec["chance"] and rec["err_signal"] < rec["err_no_change"]
+    # Unrelated noise should not.
+    noise = pd.Series(100 * np.exp(np.cumsum(rng.normal(0, 0.05, len(months)))), index=months)
+    assert not leading.track_record(noise, op)["helps"]
+    assert leading.track_record(sig.iloc[:20], op) is None            # too few months
+
+
+def test_research_notes_only_cite_candidates():
+    from labor_jobs import research
+    papers = [{"id": "s2:a", "title": "Nurse supply", "year": 2024, "venue": "J", "url": "https://doi.org/1", "citations": 50,
+               "abstract": "x"},
+              {"id": "s2:b", "title": "Care demand", "year": 2022, "venue": "K", "url": "https://doi.org/2", "citations": 9,
+               "abstract": "y"},
+              {"id": "s2:c", "title": "No abstract", "year": 2025, "citations": 999}]
+    ranked = research.rank(papers + [dict(papers[0])])
+    assert [p["id"] for p in ranked] == ["s2:a", "s2:b"]                    # duplicate and abstract-less dropped
+    cands = {"fetched": "2026-11-11", "industries": {"Health care and social assistance": ranked}}
+    rows, problems = research.check(cands, [
+        {"industry": "Health care and social assistance", "summary": "Demand keeps rising.", "sources": ["s2:a", "s2:b"]},
+        {"industry": "Health care and social assistance", "summary": "Made up.", "sources": ["s2:a", "s2:zzz"]},
+        {"industry": "Retail trade", "summary": "No candidates.", "sources": ["s2:a", "s2:b"]}])
+    assert len(rows) == 1 and rows[0]["sources"][0]["title"] == "Nurse supply" and len(problems) == 2

@@ -175,11 +175,15 @@ def main(argv=None):
     c.add_argument("--candidates", default="output/research_candidates.json")
     c.add_argument("--notes", required=True, help="JSON list of {industry, summary, sources: [candidate ids]}")
     c.add_argument("--out", default="output/dashboard/industry_research.json")
+    c.add_argument("--keep", help="last month's table: its notes stay for industries with no new note")
     args = p.parse_args(argv)
     if args.command == "fetch":
         fetch(args.out, per_industry=args.per_industry)
     else:
         rows, problems = check(json.loads(Path(args.candidates).read_text()), json.loads(Path(args.notes).read_text()))
+        if args.keep and Path(args.keep).exists():
+            have = {r["industry"] for r in rows}
+            rows += [r for r in json.loads(Path(args.keep).read_text()) if r["industry"] not in have]
         for line in problems:
             print("PROBLEM", line)
         Path(args.out).write_text(json.dumps(rows))

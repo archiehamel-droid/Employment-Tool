@@ -5,3 +5,4 @@ rapidfuzz>=3.0
 statsmodels>=0.14
 pypdf>=4.0
 python-docx>=1.0
+cffi>=1.16

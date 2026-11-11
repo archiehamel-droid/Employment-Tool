@@ -517,6 +517,38 @@ The Resume check tab runs the same matching as `--resume`, ported to JavaScript,
 inside the reader's browser. A resume pasted or opened there (Word `.docx` or plain text)
 is never uploaded or saved. PDFs can't be read in the page; paste their text instead.
 
+### Daily Adzuna collection
+
+Between monthly refreshes, a scheduled job collects Adzuna postings every day except the
+3rd (the refresh's day):
+
+```bash
+python -m labor_jobs.daily fetch --fill-inputs fill_inputs.json --out data/adzuna/daily/2026-11-12.csv
+```
+
+Each run takes postings listed in the last 2 days, so the days add mostly new postings:
+- **Sample:** 150 pages spread across job categories and states.
+- **Fill searches:** 100 searches for under-covered occupations. Up to 40 go to thin
+  occupations, a different set each day; the rest go by shortfall, such as cashiers.
+
+That is about 300 calls a day, well inside what Adzuna's free key has allowed in use.
+Adzuna shows each account's limits in the account itself, and a refusal just ends that
+day's run with what it already fetched.
+
+The search plan (`fill_inputs.json`) comes from the last monthly results, so a daily run
+needs no BLS or O*NET downloads. `python -m labor_jobs.daily export` writes it, and the
+refresh does so after each run.
+
+Each day's file goes to the dashboard's private file store, not the repository: the repo
+is public, and Adzuna's terms don't allow redistributing its data. The dashboard's
+database lists the files (`pipeline/state/adzuna_days`). The monthly refresh merges that
+month's days into `data/adzuna/<month>.csv` with `python -m labor_jobs.daily combine`,
+dropping repeats of the same posting, before its own Adzuna steps. It then removes the
+day files.
+
+Under Adzuna's terms for personal research, published results credit "The Adzuna API"
+with a link to Adzuna; the dashboard's Overview does.
+
 ## Setup
 
 ```bash

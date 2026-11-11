@@ -1,5 +1,6 @@
 """Tests on small hand-made fixtures shaped like the real BLS, O*NET and Kaggle files."""
 
+import csv
 import json
 import zipfile
 from unittest import mock
@@ -1210,3 +1211,25 @@ def test_occupation_titles_group_and_clean(tmp_path):
     t = occupation_titles(tmp_path / "p.csv")
     assert t.title.tolist() == ["Cashier", "Store Clerk"]          # pay variants grouped; singletons dropped
     assert t.postings.tolist() == [3, 2] and t.median_salary.iloc[0] == 31200
+
+
+def test_daily_combine_and_rotating_thin_searches(tmp_path):
+    from labor_jobs import adzuna, daily
+    from labor_jobs.feeds import FIELDS
+    def day(name, ids):
+        path = tmp_path / name
+        with path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
+            w.writeheader()
+            w.writerows({"job_id": i, "title": f"Job {i}", "source": "adzuna"} for i in ids)
+        return path
+    out = tmp_path / "month.csv"
+    assert daily.combine(out, [day("d1.csv", ["a", "b"]), day("d2.csv", ["b", "c"])]) == 3   # b once
+    assert daily.combine(out, [day("d3.csv", ["d"])]) == 4                                    # month file kept
+    employment = {f"11-{i:04d}": 10_000 for i in range(20)} | {"41-2011": 3_000_000}
+    titles = {soc: [f"T{soc}"] for soc in employment}
+    postings = {"41-2011": 5, "15-1252": 50_000}
+    plan = adzuna.fill_plan(employment | {"15-1252": 100}, postings, titles, 10, thin=10, thin_calls=4, rotate="d1")
+    assert sum(soc.startswith("11-") for soc, _, _ in plan) == 4 and any(soc == "41-2011" for soc, _, _ in plan)
+    other = adzuna.fill_plan(employment | {"15-1252": 100}, postings, titles, 10, thin=10, thin_calls=4, rotate="d2")
+    assert {s for s, _, _ in plan[:4]} != {s for s, _, _ in other[:4]}

@@ -25,6 +25,7 @@ snippets, so technology counts from Adzuna postings undercount.
 
 import argparse
 import csv
+import json
 import math
 import os
 import random
@@ -251,7 +252,7 @@ def read_titles(onet_dir, per_occupation=6, counts=None, mapped=None):
 
 
 def fill_plan(employment, postings, titles, calls, min_employment=20000, max_calls=10, max_page=20, searched=(),
-              thin=0, thin_employment=5000):
+              thin=0, thin_employment=5000, thin_calls=None, rotate=None):
     """Searches aimed at the occupations with the biggest shortfall of postings:
     each occupation's expected postings is its share of employment times the
     postings already matched, and calls go to the largest shortfalls. An
@@ -263,6 +264,9 @@ def fill_plan(employment, postings, titles, calls, min_employment=20000, max_cal
     With `thin`, every occupation with fewer than that many postings (and at
     least `thin_employment` workers) first gets one search of its own, since
     a small occupation's shortfall is too small to earn a share of the calls.
+    `thin_calls` caps that pass (the rest go by shortfall), and `rotate` (any
+    seed, such as the date) shuffles which thin occupations get the capped
+    searches, so daily runs work through all of them over the month.
     Returns (soc, title, page) triples."""
     total = sum(postings.values())
     emp_total = sum(employment.values())
@@ -303,10 +307,16 @@ def fill_plan(employment, postings, titles, calls, min_employment=20000, max_cal
                 return True
         return False
 
-    for soc in thin_order:
-        if len(plan) >= calls:
-            return plan
+    thin_pass = list(thin_order)
+    if rotate is not None:
+        random.Random(str(rotate)).shuffle(thin_pass)
+    thin_cap = calls if thin_calls is None else min(calls, thin_calls)
+    for soc in thin_pass:
+        if len(plan) >= thin_cap:
+            break
         take(soc)
+    if len(plan) >= calls:
+        return plan
     calls -= len(plan)
     if not order or calls <= 0:
         return plan
@@ -394,6 +404,24 @@ def _fill_inputs(results, oews_nat):
     return employment, postings
 
 
+def export_fill_inputs(results, out, oews_nat="data/cache/oesm24nat.zip", onet_dir="data/cache/onet_29_3",
+                       title_count_files=()):
+    """Save what --fill needs as one small JSON file (each occupation's employment,
+    postings found and search titles), so a later fill can run without the results
+    folder, O*NET or OEWS files: python -m labor_jobs.adzuna --fill-inputs FILE."""
+    employment, postings = _fill_inputs(results, oews_nat)
+    titles = read_titles(onet_dir, counts=title_counts(title_count_files), mapped=mapped_titles(results))
+    data = {"results": str(results), "employment": employment, "postings": postings, "titles": titles}
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(json.dumps(data, separators=(",", ":")))
+    return data
+
+
+def load_fill_inputs(path):
+    data = json.loads(Path(path).read_text())
+    return data["employment"], data["postings"], data["titles"]
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="labor_jobs.adzuna", description=__doc__.split("\n\n")[0])
     p.add_argument("--app-id", default=os.environ.get("ADZUNA_APP_ID"))
@@ -409,6 +437,8 @@ def main(argv=None):
     p.add_argument("--fill", metavar="RESULTS",
                    help="aim the --pages searches at occupations with too few postings in this results "
                         "folder (its occupations.csv), searching their common O*NET titles")
+    p.add_argument("--fill-inputs", metavar="JSON",
+                   help="like --fill, from a file saved by export_fill_inputs (no results folder needed)")
     p.add_argument("--onet-dir", default="data/cache/onet_29_3", help="O*NET text files, for --fill")
     p.add_argument("--oews", default="data/cache/oesm24nat.zip", help="OEWS national file, for --fill")
     p.add_argument("--thin", type=int, default=10, metavar="N",
@@ -425,12 +455,15 @@ def main(argv=None):
         sys.exit("Set --app-id and --app-key (or ADZUNA_APP_ID / ADZUNA_APP_KEY). "
                  "Register free at https://developer.adzuna.com/")
 
-    if args.fill:
-        employment, postings = _fill_inputs(args.fill, args.oews)
+    if args.fill or args.fill_inputs:
+        if args.fill_inputs:
+            employment, postings, titles = load_fill_inputs(args.fill_inputs)
+        else:
+            employment, postings = _fill_inputs(args.fill, args.oews)
+            titles = read_titles(args.onet_dir, counts=title_counts(args.title_counts), mapped=mapped_titles(args.fill))
         # Titles searched by earlier fills into this file, so a second run searches new ones.
         log = Path(str(args.out) + ".fill-titles.txt")
         searched = log.read_text().splitlines() if args.append and log.exists() else []
-        titles = read_titles(args.onet_dir, counts=title_counts(args.title_counts), mapped=mapped_titles(args.fill))
         plan = fill_plan(employment, postings, titles, args.pages, searched=searched, thin=args.thin)
         print(f"Searching {len(plan)} pages across {len({s for s, _, _ in plan})} occupations")
         if not args.append and log.exists():

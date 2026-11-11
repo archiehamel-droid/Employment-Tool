@@ -83,13 +83,17 @@ class Refresh:
         postings = [str(p) for p in (self.adzuna, self.usajobs, self.ats) if p.exists()]
         if not postings:
             raise SystemExit("No postings were fetched; nothing to run.")
-        if self.results.exists() and self.args.force is False and name == "main run (first)":
+        # Only a finished run counts as done: a failed one can leave an empty folder.
+        if (self.results / "coverage.json").exists() and not self.args.force and name == "main run (first)":
             self.log["steps"].append({"step": name, "status": "skipped (already done)"})
             return True
         return self.run(name, ["labor_jobs", "--postings", *postings, "--out", str(self.results), "--no-history"])
 
     def go(self):
         a = self.args
+        if not os.environ.get("BLS_CONTACT_EMAIL"):
+            # bls.gov refuses downloads (HTTP 403) from clients that don't give a contact address.
+            raise SystemExit("BLS_CONTACT_EMAIL is not set; bls.gov refuses the BLS downloads without it.")
         usajobs = ["labor_jobs.usajobs", "--days", "31", "--out", str(self.usajobs)] + ([] if a.no_text else ["--text"])
         self.run("USAJOBS", usajobs, self.usajobs)
         self.run("company job boards", ["labor_jobs.ats", "--out", str(self.ats)], self.ats)
@@ -112,6 +116,12 @@ class Refresh:
                                                        "--append"])
             self.main_run("main run (with fill)")
         self.run("dashboard data", ["labor_jobs.dashboard", "--results", str(self.results), "--out", a.dashboard])
+        # The plan the daily Adzuna runs use until next month: shortfalls from this month's results.
+        if (self.results / "coverage.json").exists():
+            export = ["labor_jobs.daily", "export", "--results", str(self.results), "--out", a.fill_inputs]
+            if a.title_counts and Path(a.title_counts).exists():
+                export += ["--title-counts", a.title_counts]
+            self.run("fill inputs for daily runs", export)
 
         coverage = self.results / "coverage.json"
         if coverage.exists():
@@ -140,6 +150,8 @@ def main(argv=None):
                    help="postings file whose titles rank fill searches, used when present")
     p.add_argument("--no-text", action="store_true", help="skip fetching USAJOBS announcement text (faster)")
     p.add_argument("--dashboard", default="output/dashboard")
+    p.add_argument("--fill-inputs", default="output/fill_inputs.json",
+                   help="where to save the search plan the daily Adzuna runs use")
     p.add_argument("--force", action="store_true", help="redo steps whose output already exists")
     sys.exit(Refresh(p.parse_args(argv)).go())
 

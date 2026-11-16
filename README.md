@@ -485,7 +485,9 @@ take the average of the occupations in their broad SOC group (`fill_from_related
 
 The dashboard's Profile tab collects interests (test scores, a code or an 18-question
 quiz), Big Five personality (scores or the Ten-Item Personality Inventory, turned into
-percentiles with its published norms), thinking strengths and work values. It turns them
+percentiles with its published norms), thinking strengths and work values (rated directly
+or through an 18-question quiz, three statements per value drawn from the work needs
+O*NET's values group; a value's average answer sets it as very, somewhat or less important). It turns them
 into a general career profile:
 - your highlights in words
 - the career areas (SOC major groups) whose best-fitting occupations fit you most

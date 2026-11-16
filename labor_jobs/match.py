@@ -324,6 +324,12 @@ def score_occupations(detailed, profile, major_socs, rank_by=None, requirements=
             why.append(f"interests match ({trait['holland']})")
         if trait["signals"].get("styles", 0) >= 0.7:
             why.append("personality suits its work styles")
+        if trait.get("uses"):
+            why.append("uses your strengths in " + ", ".join(trait["uses"]))
+        if trait.get("leans_on"):
+            why.append("leans on areas you rated weaker: " + ", ".join(trait["leans_on"]))
+        if trait["signals"].get("values", 0) >= 0.8:
+            why.append("offers what you value at work")
 
         def average(keys):
             keys = [k for k in scored if k in keys]
@@ -684,7 +690,18 @@ def read_tests(args):
         tests["mbti"] = args.mbti.strip().upper()[:4]
     if args.iq:
         tests["iq"] = args.iq
+    if getattr(args, "strengths", None):
+        tests["abilities"] = {k.lower(): v.lower() for k, v in _text_pairs(args.strengths).items()
+                              if k.lower() in personality.ABILITY_AREAS and v.lower() in personality.STRENGTH}
+    if getattr(args, "values", None):
+        tests["values"] = {k.lower(): v.lower() for k, v in _text_pairs(args.values).items()
+                           if k.lower() in personality.WORK_VALUES and v.lower() in personality.IMPORTANCE}
     return tests
+
+
+def _text_pairs(text):
+    """'verbal=strength, numbers=weakness' -> {'verbal': 'strength', 'numbers': 'weakness'}."""
+    return dict(part.split("=", 1) for part in (x.strip() for x in text.split(",")) if "=" in part)
 
 
 def main(argv=None):
@@ -706,6 +723,10 @@ def main(argv=None):
     p.add_argument("--mbti", help="Myers-Briggs type, e.g. INTJ (weak evidence; used lightly)")
     p.add_argument("--iq", type=int, help="IQ or cognitive score (shown against each job's reasoning demand; "
                                           "never changes the ranking)")
+    p.add_argument("--strengths", help='thinking strengths and weaknesses, e.g. "verbal=strength,numbers=weakness,'
+                                       'spatial=average" (areas: ' + ", ".join(personality.ABILITY_AREAS) + ")")
+    p.add_argument("--values", help='what matters most at work, e.g. "independence=very,recognition=less" '
+                                    '(values: ' + ", ".join(personality.WORK_VALUES) + "; very, some or less)")
     p.add_argument("--rank-by", default="resume=100,personality=40",
                    help='what to rank occupations by and how much: a preset (' + ", ".join(RANK_PRESETS) +
                         ') or weights like "resume=50,personality=20,salary=100,outlook=30"')
@@ -723,8 +744,10 @@ def main(argv=None):
     p.add_argument("--skip-h1b", action="store_true", help="don't use H-1B job titles for matching")
     p.add_argument("--contact-email", default=os.environ.get("BLS_CONTACT_EMAIL"))
     args = p.parse_args(argv)
-    if not (args.resume or args.major or args.tests or args.riasec or args.big_five or args.mbti):
-        p.error("give --resume, --major, test results (--tests, --riasec, --big-five, --mbti) or a mix")
+    if not (args.resume or args.major or args.tests or args.riasec or args.big_five or args.mbti
+            or args.strengths or args.values):
+        p.error("give --resume, --major, test results (--tests, --riasec, --big-five, --mbti, --strengths, "
+                "--values) or a mix")
 
     results = Path(args.results)
     out = Path(args.out) if args.out else results / "matches"
@@ -775,7 +798,8 @@ def main(argv=None):
     tests = read_tests(args)
     if any(tests.values()):
         profile["tests"] = tests
-        traits = personality.occupation_traits(args.onet_version, args.cache, user_agent, args.onet_dir)
+        traits = personality.occupation_traits(args.onet_version, args.cache, user_agent, args.onet_dir,
+                                               codes=detailed["onet_code"])
         traits = personality.blend_posting_traits(traits, detailed)
         profile["traits"] = personality.trait_signals(tests, traits[traits["onet_code"].isin(detailed["onet_code"])])
     rank_by = parse_rank_by(args.rank_by)

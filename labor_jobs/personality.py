@@ -20,6 +20,19 @@ How much each test can say about job fit differs, and the scoring follows that:
 * An IQ or other cognitive score is only described against each
   occupation's reasoning demands (O*NET ability levels). It never changes a
   ranking: one number says little about which field suits someone.
+* Thinking strengths and weaknesses are a person's own rating of seven areas
+  (verbal, numbers, reasoning, spatial, memory, speed and attention, hands-on
+  and physical), compared with how much each occupation relies on the
+  matching O*NET abilities. A job that leans on a strength scores higher, one
+  that leans on a weakness lower. Abilities relate to doing a job well more
+  than to enjoying it; self-ratings are rough, so this counts moderately.
+* Work values (achievement, independence, recognition, relationships,
+  support, working conditions) are what a person most wants from work,
+  compared with O*NET's ratings of how much each occupation offers them.
+  With interests, values are the better guide to satisfaction.
+
+The Profile tab groups these: interests and values into "satisfaction",
+abilities and work styles into "strengths".
 """
 
 import math
@@ -53,13 +66,33 @@ MBTI_INTERESTS = {
     "E": {"E": 1, "S": 1}, "I": {"I": 1, "R": 0.5}, "N": {"A": 1, "I": 1}, "S": {"C": 1, "R": 1},
     "F": {"S": 1, "A": 0.5}, "T": {"I": 0.5, "R": 0.5, "E": 0.5}, "J": {"C": 1}, "P": {"A": 1},
 }
-WEIGHTS = {"interests": 2.0, "mbti": 0.75, "styles": 1.0}
+WEIGHTS = {"interests": 2.0, "mbti": 0.75, "styles": 1.0, "abilities": 1.0, "values": 1.0}
+# O*NET abilities behind each thinking or physical area a person can rate.
+ABILITY_AREAS = {
+    "verbal": ["Oral Comprehension", "Written Comprehension", "Oral Expression", "Written Expression"],
+    "numbers": ["Mathematical Reasoning", "Number Facility"],
+    "reasoning": ["Deductive Reasoning", "Inductive Reasoning", "Problem Sensitivity", "Information Ordering",
+                  "Category Flexibility", "Fluency of Ideas", "Originality"],
+    "spatial": ["Spatial Orientation", "Visualization"],
+    "memory": ["Memorization"],
+    "attention": ["Perceptual Speed", "Speed of Closure", "Flexibility of Closure", "Selective Attention", "Time Sharing"],
+    "physical": ["Manual Dexterity", "Finger Dexterity", "Arm-Hand Steadiness", "Control Precision",
+                 "Multilimb Coordination", "Static Strength", "Stamina", "Trunk Strength", "Dynamic Strength"],
+}
+WORK_VALUES = {"achievement": "Achievement", "independence": "Independence", "recognition": "Recognition",
+               "relationships": "Relationships", "support": "Support", "conditions": "Working Conditions"}
+# A person's rating of an area or value as a number.
+STRENGTH = {"strength": 1.0, "average": 0.5, "weakness": 0.0}
+IMPORTANCE = {"very": 1.0, "some": 0.6, "less": 0.2}
 
 
-def occupation_traits(version, cache_dir, user_agent, onet_dir=None):
+def occupation_traits(version, cache_dir, user_agent, onet_dir=None, codes=None):
     """One row per O*NET occupation: RIASEC interest levels (1-7), Big Five
     trait demand from its work styles (0-1, ranked across occupations), and
-    reasoning demand (mean O*NET level of reasoning abilities, 0-7)."""
+    reasoning demand (mean O*NET level of reasoning abilities, 0-7), plus each
+    ability area's and work value's rank across occupations (ab_*, wv_*, 0-1).
+    `codes` adds occupations O*NET doesn't rate ("All Other" catch-alls), filled
+    from related ones like other gaps (fill_from_related)."""
     def load(name):
         df = read_onet(onet_file(name, version, cache_dir, user_agent, onet_dir))
         return df.assign(**{"Data Value": pd.to_numeric(df["Data Value"], errors="coerce")})
@@ -74,12 +107,42 @@ def occupation_traits(version, cache_dir, user_agent, onet_dir=None):
     big5 = pd.DataFrame({t: styles[[c for c in cols if c in styles]].mean(axis=1) for t, cols in WORK_STYLES.items()})
     big5 = big5.rank(pct=True)                       # comparable with a person's percentiles
     abilities = load("Abilities.txt")
-    abilities = abilities[(abilities["Scale ID"] == "LV") & abilities["Element Name"].isin(REASONING)]
-    reasoning = abilities.groupby("O*NET-SOC Code")["Data Value"].mean().rename("reasoning")
-    out = riasec.join(big5.add_prefix("b5_"), how="outer").join(reasoning, how="outer")
-    out["reasoning_band"] = [reasoning_band(v, reasoning) for v in out["reasoning"]]
+    levels = abilities[abilities["Scale ID"] == "LV"]
+    reasoning = levels[levels["Element Name"].isin(REASONING)].groupby("O*NET-SOC Code")["Data Value"].mean()
+    reasoning = reasoning.rename("reasoning")
+    # How much each occupation relies on each area: mean ability level, ranked across occupations.
+    areas = pd.DataFrame({f"ab_{area}": levels[levels["Element Name"].isin(names)]
+                          .groupby("O*NET-SOC Code")["Data Value"].mean() for area, names in ABILITY_AREAS.items()})
+    areas = areas.rank(pct=True)
+    out = riasec.join(big5.add_prefix("b5_"), how="outer").join(reasoning, how="outer").join(areas, how="outer")
+    try:
+        values = load("Work Values.txt")
+    except Exception:  # an older O*NET copy without the file: values just don't count
+        values = None
+    if values is not None:
+        values = values[values["Scale ID"] == "EX"].pivot_table(
+            index="O*NET-SOC Code", columns="Element Name", values="Data Value", aggfunc="mean")
+        offered = pd.DataFrame({f"wv_{key}": values[name] for key, name in WORK_VALUES.items() if name in values})
+        out = out.join(offered.rank(pct=True), how="outer")
+    if codes is not None:
+        out = out.reindex(out.index.union(pd.Index(list(codes))))
+    out = fill_from_related(out)
+    out["reasoning_band"] = [reasoning_band(v, out["reasoning"].dropna()) for v in out["reasoning"]]
     out.index.name = "onet_code"
     return out.reset_index()
+
+
+def fill_from_related(table):
+    """Newer O*NET codes (Software Developers 15-1252, Data Scientists 15-2051...)
+    often have no ratings yet. Fill each gap with the average of the occupations
+    in the same broad SOC group (the first six characters, 15-125), or failing
+    that the same minor group (15-12). Rows are O*NET codes."""
+    out = table.copy()
+    for width in (6, 5):
+        group = out.index.str[:width]
+        means = out.groupby(group).transform("mean")
+        out = out.fillna(means)
+    return out
 
 
 def blend_posting_traits(traits, detailed, min_postings=10):
@@ -221,6 +284,45 @@ def style_fit(person, occupation):
     return 1 - sum(gaps) / len(gaps) if gaps else None
 
 
+def _num(v):
+    return None if v is None or (isinstance(v, float) and math.isnan(v)) else v
+
+
+def ability_fit(person, occupation):
+    """0-1 (0.5 neutral): whether the occupation leans on the areas a person rates
+    as strengths (higher) or weaknesses (lower). person maps areas to
+    'strength', 'average' or 'weakness'; areas not rated don't count. Also
+    returns the areas the job relies on heavily (top quarter) that the person
+    rated as strengths and as weaknesses."""
+    parts, uses, leans = [], [], []
+    for area, rating in person.items():
+        demand = _num(occupation.get(f"ab_{area}"))
+        if rating not in STRENGTH or demand is None:
+            continue
+        parts.append((STRENGTH[rating] - 0.5) * 2 * demand)
+        if demand >= 0.75 and rating == "strength":
+            uses.append(area)
+        if demand >= 0.75 and rating == "weakness":
+            leans.append(area)
+    if not parts:
+        return None, [], []
+    return (sum(parts) / len(parts) + 1) / 2, uses, leans
+
+
+def values_fit(person, occupation):
+    """0-1: how much the occupation offers what a person values, the mean of its
+    ranks on each work value weighted by how important the person says it is
+    ('very', 'some' or 'less')."""
+    num = den = 0.0
+    for key, importance in person.items():
+        offered = _num(occupation.get(f"wv_{key}"))
+        if importance not in IMPORTANCE or offered is None:
+            continue
+        num += IMPORTANCE[importance] * offered
+        den += IMPORTANCE[importance]
+    return num / den if den else None
+
+
 def holland_code(scores, n=3):
     """The top letters of a set of RIASEC scores, highest first ('SIC')."""
     return "".join(sorted(RIASEC, key=lambda k: -scores[k])[:n])
@@ -232,8 +334,9 @@ def trait_signals(tests, traits):
     riasec = tests.get("riasec")
     mbti_scores = None if riasec else mbti_to_riasec(tests.get("mbti"))
     big5 = tests.get("big_five")
+    strengths, values = tests.get("abilities") or {}, tests.get("values") or {}
     out = {}
-    raw_styles = {}
+    raw_styles, raw_values = {}, {}
     for row in traits.to_dict("records"):
         s = {}
         if riasec:
@@ -242,14 +345,20 @@ def trait_signals(tests, traits):
             s["mbti"] = interest_fit(mbti_scores, row)
         if big5:
             raw_styles[row["onet_code"]] = style_fit(big5, row)
+        uses, leans = [], []
+        if strengths:
+            s["abilities"], uses, leans = ability_fit(strengths, row)
+        if values:
+            raw_values[row["onet_code"]] = values_fit(values, row)
         code = holland_code(row) if all(not pd.isna(row.get(k)) for k in RIASEC) else None
         out[row["onet_code"]] = {"signals": {k: v for k, v in s.items() if v is not None}, "holland": code,
-                                 "reasoning": row.get("reasoning_band")}
-    # Work-style fit varies little in absolute terms: spread it over 0-1.
-    found = [v for v in raw_styles.values() if v is not None]
-    if found:
-        lo, hi = min(found), max(found)
-        for code, v in raw_styles.items():
-            if v is not None:
-                out[code]["signals"]["styles"] = (v - lo) / (hi - lo) if hi > lo else 1.0
+                                 "reasoning": row.get("reasoning_band"), "uses": uses, "leans_on": leans}
+    # Work-style and values fit vary little in absolute terms: spread each over 0-1.
+    for name, raw in (("styles", raw_styles), ("values", raw_values)):
+        found = [v for v in raw.values() if v is not None]
+        if found:
+            lo, hi = min(found), max(found)
+            for code, v in raw.items():
+                if v is not None:
+                    out[code]["signals"][name] = (v - lo) / (hi - lo) if hi > lo else 1.0
     return out

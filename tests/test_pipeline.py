@@ -1265,3 +1265,26 @@ def test_research_notes_only_cite_candidates():
         {"industry": "Health care and social assistance", "summary": "Made up.", "sources": ["s2:a", "s2:zzz"]},
         {"industry": "Retail trade", "summary": "No candidates.", "sources": ["s2:a", "s2:b"]}])
     assert len(rows) == 1 and rows[0]["sources"][0]["title"] == "Nurse supply" and len(problems) == 2
+
+
+def test_profile_strengths_values_and_gaps():
+    from labor_jobs import personality as P
+    job = {"ab_verbal": 0.9, "ab_numbers": 0.8, "ab_physical": 0.1, "wv_independence": 0.9, "wv_recognition": 0.2}
+    fit, uses, leans = P.ability_fit({"verbal": "strength", "numbers": "weakness", "physical": "weakness"}, job)
+    assert uses == ["verbal"] and leans == ["numbers"] and 0 < fit < 1
+    better, _, _ = P.ability_fit({"verbal": "strength", "numbers": "strength"}, job)
+    assert better > fit and P.ability_fit({}, job)[0] is None
+    assert P.values_fit({"independence": "very", "recognition": "less"}, job) > P.values_fit(
+        {"independence": "less", "recognition": "very"}, job)
+    # A code O*NET doesn't rate takes its broad group's average.
+    table = pd.DataFrame({"ab_verbal": [0.2, 0.6, np.nan]}, index=["15-1251.00", "15-1254.00", "15-1252.00"])
+    assert P.fill_from_related(table).loc["15-1252.00", "ab_verbal"] == pytest.approx(0.4)
+
+
+def test_contact_email_only_goes_to_bls():
+    from labor_jobs.fetch import agent_for
+    ua = "labor-jobs/1.0 (someone@example.com)"
+    assert agent_for("https://www.bls.gov/oes/x.zip", ua) == ua
+    assert agent_for("https://download.bls.gov/pub/x", ua) == ua
+    assert agent_for("https://www.onetcenter.org/dl_files/x.txt", ua) == "labor-jobs/1.0"
+    assert agent_for("https://notbls.gov.example.com/x", ua) == "labor-jobs/1.0"

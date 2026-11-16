@@ -238,16 +238,19 @@ def resume_tables(results, out, detailed, cache, user_agent, onet_version, h1b_y
                                               "typical_education", *need_cols]].rename(columns={"onet_title": "title"})))
     _save(out, "credential_patterns", posting_requirements.export_rows())
 
-    traits = personality.blend_posting_traits(personality.occupation_traits(onet_version, cache, user_agent),
-                                              detailed)
     codes = set(occ["onet_code"])
+    traits = personality.blend_posting_traits(
+        personality.occupation_traits(onet_version, cache, user_agent, codes=codes), detailed)
+
+    def num(v, digits=2):
+        return None if pd.isna(v) else round(float(v), digits)
+    extra = [c for c in traits.columns if c.startswith(("ab_", "wv_"))]
     _save(out, "occupation_traits", [
-        {"o": r.onet_code, **{k.lower(): None if pd.isna(getattr(r, k)) else round(getattr(r, k), 2)
-                              for k in personality.RIASEC},
-         **{f"b{k.lower()}": None if pd.isna(getattr(r, f"b5_{k}")) else round(getattr(r, f"b5_{k}"), 3)
-            for k in personality.BIG_FIVE},
-         "rz": r.reasoning_band if isinstance(r.reasoning_band, str) else None}
-        for r in traits.itertuples(index=False) if r.onet_code in codes])
+        {"o": r["onet_code"], **{k.lower(): num(r[k]) for k in personality.RIASEC},
+         **{f"b{k.lower()}": num(r[f"b5_{k}"], 3) for k in personality.BIG_FIVE},
+         **{c: num(r[c]) for c in extra},
+         "rz": r["reasoning_band"] if isinstance(r["reasoning_band"], str) else None}
+        for r in traits.to_dict("records") if r["onet_code"] in codes])
     model = occupation_text.TextModel(occupation_text.occupation_documents(onet_version, cache, user_agent))
     _save(out, "occupation_text", model.export_rows(set(occ["onet_code"])))
 

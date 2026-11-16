@@ -462,6 +462,41 @@ Each kind of result counts by how well it predicts job fit:
 The dashboard's Resume check tab has the same inputs. It also has an 18-question interest
 quiz for people who haven't taken a test, which is a rough sketch, not a validated test.
 
+#### Thinking strengths and work values
+
+Two more inputs, from the dashboard's Profile tab or the command line:
+- **Thinking strengths and weaknesses** (`--strengths "verbal=strength,numbers=weakness"`):
+  a person's own rating of seven areas against how heavily each occupation relies on the
+  matching O*NET abilities (`ABILITY_AREAS`, ranked across occupations). The areas are
+  verbal, numbers, reasoning, spatial, memory, attention and physical. Leaning on a
+  strength raises the fit and leaning on a weaker area lowers it. Both are named in "why"
+  when the job is in the top quarter for that area.
+- **Work values** (`--values "relationships=very,recognition=less"`): very, some or less
+  important for each of O*NET's six work values. These are achievement, independence,
+  recognition, relationships, support and working conditions. They are compared with how
+  much each occupation offers them.
+
+Abilities relate more to doing a job well and values more to enjoying it. Both count
+moderately (weight 1, against 2 for interests) within the interests-and-personality part
+of the ranking. Occupations O*NET hasn't rated yet, such as Software Developers 15-1252,
+take the average of the occupations in their broad SOC group (`fill_from_related`).
+
+#### The Profile tab
+
+The dashboard's Profile tab collects interests (test scores, a code or an 18-question
+quiz), Big Five personality (scores or the Ten-Item Personality Inventory, turned into
+percentiles with its published norms), thinking strengths and work values. It turns them
+into a general career profile:
+- your highlights in words
+- the career areas (SOC major groups) whose best-fitting occupations fit you most
+- three lists: jobs you may find satisfying (interests and values), jobs that play to your
+  strengths (abilities and work styles), and the best of both
+- "worth weighing": satisfying jobs that lean on areas you rated weaker
+
+The same answers feed the Resume check, which names strengths used and weaker areas
+relied on in each occupation's reasons. Answers stay in the browser, and are remembered
+there between visits.
+
 ### Checking a resume against specific postings
 
 With `--resume`, each posting in the best-fitting occupations is checked against the

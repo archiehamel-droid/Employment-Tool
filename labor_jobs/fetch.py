@@ -1,9 +1,20 @@
 """Download helper with on-disk caching."""
 
+import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
+
+
+def agent_for(url, user_agent):
+    """The User-Agent to send to url. Contact details in parentheses (an email
+    address) go only to bls.gov, which requires them; other sites get the bare name."""
+    host = (urlparse(url).hostname or "").lower()
+    if host == "bls.gov" or host.endswith(".bls.gov"):
+        return user_agent
+    return re.sub(r"\s*\(.*?\)", "", user_agent).strip() or "labor-jobs/1.0"
 
 
 def download(url, dest, user_agent, max_age_days=None):
@@ -14,7 +25,7 @@ def download(url, dest, user_agent, max_age_days=None):
     if dest.exists() and dest.stat().st_size > 0 and fresh:
         return dest
     print(f"  downloading {url}")
-    resp = requests.get(url, headers={"User-Agent": user_agent}, timeout=300)
+    resp = requests.get(url, headers={"User-Agent": agent_for(url, user_agent)}, timeout=300)
     if resp.status_code == 403:
         raise RuntimeError(
             f"{url} refused the download (HTTP 403). bls.gov requires a "
